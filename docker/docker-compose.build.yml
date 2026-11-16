@@ -1,0 +1,7 @@
+services:
+  jammy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: jammy:local
+    pull_policy: never

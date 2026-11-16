@@ -1,0 +1,5 @@
+*
+!jammy-chat.html
+!docker/server/Cargo.toml
+!docker/server/Cargo.lock
+!docker/server/src/**

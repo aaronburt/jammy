@@ -1,0 +1,12 @@
+services:
+  jammy:
+    image: ghcr.io/aaronburt/jammy:latest
+    pull_policy: always
+    container_name: jammy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
