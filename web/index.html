@@ -569,7 +569,7 @@ button { cursor: pointer; }
     deep: "Thinking profile: Deep. Reason step by step before answering. Consider edge cases and say what you're unsure about.",
     critical: "Thinking profile: Critical. Think as hard as you can. Question assumptions and look for failure modes and counterarguments. Before you answer, check your work: re-verify every fact, calculation, command and line of code, test your conclusion against the strongest objection, and fix anything that doesn't hold up. Be honest about weak spots and anything you couldn't verify.",
   };
-  const EFFORT = { quick: "low", deep: "medium", critical: "high" };
+  const EFFORT = { quick: "low", deep: "high", critical: "ultra" }; // Hermes accepts minimal, low, medium, high, xhigh, max, ultra
   const STARTERS = [
     ["💻", "Check my system", "What's using the most disk space on this machine?"],
     ["🔍", "Research something", "Search the web for the latest on local LLM inference and summarize it."],
