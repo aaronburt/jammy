@@ -344,6 +344,26 @@ button { cursor: pointer; }
 .qnote button { border: 1px solid var(--line); background: var(--glass); border-radius: 999px; padding: 3px 12px; font: 500 12px var(--f-body); color: var(--fg); }
 .qnote button:hover { border-color: var(--accent); color: var(--accent); }
 
+/* Hermes history: chips, filter, notes */
+.hfilter { display: flex; gap: 4px; }
+.hfilter[hidden], .hnote[hidden] { display: none; }
+.hfilter button { flex: 1; border: 1px solid var(--line); background: none; border-radius: 999px; padding: 4px 4px; font: 500 12px var(--f-body); color: var(--muted); white-space: nowrap; }
+.hfilter button:hover { color: var(--fg); }
+.hfilter button[aria-pressed="true"] { background: var(--accent-soft); color: var(--fg); border-color: var(--accent); }
+.hnote { font: 400 11.5px/1.45 var(--f-mono); color: var(--muted); padding: 0 4px; }
+.hnote.err { color: var(--warn); }
+.hnote button { border: 0; background: none; color: var(--accent); padding: 0 0 0 4px; font: inherit; text-decoration: underline; cursor: pointer; }
+.src { flex: none; font: 500 9.5px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; max-width: 86px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src.jammy { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
+.conv .del.armed { opacity: 1; flex: none; color: var(--err); font: 600 12px var(--f-body); padding: 2px 8px; border: 1px solid color-mix(in oklab, var(--err) 50%, transparent); }
+.hmore { align-self: center; margin: 8px 0 2px; border: 1px solid var(--line); background: none; border-radius: 999px; padding: 5px 14px; font: 500 12px var(--f-body); color: var(--muted); cursor: pointer; }
+.hmore:hover { border-color: var(--accent); color: var(--accent); }
+.remote-note { display: flex; gap: 6px 12px; align-items: center; flex-wrap: wrap; border: 1px dashed var(--line); background: var(--glass); border-radius: 14px; padding: 8px 14px; font-size: 13px; color: var(--muted); }
+.remote-note b { color: var(--fg); font-weight: 600; }
+.remote-note button { margin-left: auto; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 12px; font: 500 12.5px var(--f-body); color: var(--fg); cursor: pointer; }
+.remote-note button:hover { border-color: var(--accent); color: var(--accent); }
+.remote-state { text-align: center; color: var(--muted); padding: 36px 0; font-size: 14px; }
+
 /* ---------- Narrower screens ---------- */
 @media (max-width: 1180px) {
   .hello { grid-template-columns: 1fr; } .hello .pedestal { display: none; }
@@ -432,6 +452,12 @@ button { cursor: pointer; }
     <div class="in">
       <div class="head"><h2>Your chats</h2><span class="eyebrow" id="histCount"></span></div>
       <input class="search" id="search" type="text" placeholder="Search chats" aria-label="Search chats">
+      <div class="hfilter" id="hfilter" role="group" aria-label="Show chats from" hidden>
+        <button type="button" data-f="all" aria-pressed="true">All</button>
+        <button type="button" data-f="jammy" aria-pressed="false">Jammy</button>
+        <button type="button" data-f="other" aria-pressed="false">Other apps</button>
+      </div>
+      <div class="hnote" id="hnote" hidden></div>
       <div class="convs" id="convs"></div>
     </div>
   </aside>
@@ -465,6 +491,9 @@ button { cursor: pointer; }
     <div class="row"><button class="btn" type="button" id="testBtn">Test connection</button></div>
     <div class="test-out" id="testOut" hidden></div>
     <label class="switch"><input type="checkbox" id="sDemo"><div><b>Demo mode</b><span>Canned replies with sample tool activity. No server needed.</span></div></label>
+    <div class="group">History</div>
+    <label class="switch"><input type="checkbox" id="sKeep"><div><b>Keep Jammy chats in Hermes</b><span>Tags every chat Jammy starts with its own Hermes session (named <code>jammy-…</code>). Hermes keeps it, and History can tell which chats began here. Needs a Hermes with the sessions API.</span></div></label>
+    <label class="switch"><input type="checkbox" id="sShow"><div><b>Show Hermes sessions in History</b><span>Lists Hermes's own sessions next to Jammy's chats, including ones from the terminal or messaging apps. Those open read-only; reply to carry on as a new Jammy chat.</span></div></label>
     <div class="group">Personality</div>
     <div class="field">
       <label for="sName">What should Jammy call you?</label>
@@ -546,7 +575,7 @@ button { cursor: pointer; }
   const onClaudeHost = /(^|\.)claude\.ai$|claudeusercontent|anthropic/i.test(location.hostname);
   let settings = Object.assign({
     endpoint: "http://127.0.0.1:8642/v1/chat/completions", key: "", model: "hermes-agent",
-    persona: true, prompt: DEFAULT_PERSONA, name: "", aiGreet: true, aiFollow: true, mood: "quick", flavour: "raspberry", demo: onClaudeHost,
+    persona: true, prompt: DEFAULT_PERSONA, name: "", aiGreet: true, aiFollow: true, keepInHermes: true, showHermes: true, mood: "quick", flavour: "raspberry", demo: onClaudeHost,
   }, store.get("settings", {}));
   const persist = () => { const { _ok, ...p } = settings; store.set("settings", p); };
   let theme = store.get("theme", "system");
@@ -556,10 +585,11 @@ button { cursor: pointer; }
   let bannerDismissed = store.get("bannerDismissed", false);
   let streaming = null; // { convId, msgId, controller, t0 }
   let query = "";
+  let view = null; // a Hermes session open for reading: a chat-shaped object with readonly: true, never saved
 
   const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  const save = () => { store.set("convs", convs); store.set("active", activeId); };
-  const active = () => convs.find((c) => c.id === activeId) || null;
+  const save = () => { store.set("convs", convs); store.set("active", activeId && String(activeId).startsWith("r:") ? null : activeId); };
+  const active = () => convs.find((c) => c.id === activeId) || (view && view.id === activeId ? view : null);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const secs = (ms) => (ms < 950 ? "<1s" : ms < 59500 ? (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + "s" : Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s");
   const host = (u) => { try { return new URL(u).host; } catch { return u; } };
@@ -648,25 +678,238 @@ button { cursor: pointer; }
   scroller.addEventListener("scroll", () => { stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90; });
   const scrollDown = (force) => { if (force || stick) scroller.scrollTop = scroller.scrollHeight; };
 
+  // ---------- Hermes history ----------
+  // Jammy tags every chat it starts with an explicit Hermes session id (X-Hermes-Session-Id: jammy-...), so Hermes keeps the
+  // chat and anything in Hermes's own list can be told apart. Hermes documents its /api/sessions routes only in part, so
+  // every response is read defensively, and any failure just leaves History showing Jammy's own chats.
+  const JAMMY = "jammy-", AUX = "jammy-aux-", PAGE_N = 40;
+  const SRC = { api_server: "API", api: "API", cli: "Terminal", tui: "Terminal", desktop: "Desktop", acp: "Editor", telegram: "Telegram", discord: "Discord", slack: "Slack", whatsapp: "WhatsApp", signal: "Signal", matrix: "Matrix", email: "Email", sms: "SMS", webhook: "Webhook", cron: "Scheduled" };
+  let remote = { list: [], raw: 0, loading: false, loaded: false, error: "", more: false, at: 0 };
+  let sidOff = false; // Hermes refused the session tag, so chats go out untagged until settings change
+  const sameOrigin = () => { try { return new URL(settings.endpoint).origin === location.origin; } catch { return false; } };
+  const canApi = () => !settings.demo && (!!settings.key || sameOrigin());
+  const wantsHermes = () => settings.showHermes !== false;
+  const isJammySid = (id) => String(id).startsWith(JAMMY) && !String(id).startsWith(AUX);
+  const apiBase = () => { try { const u = new URL(settings.endpoint); return u.origin + u.pathname.replace(/\/v1\/chat\/completions\/?$/, "").replace(/\/+$/, ""); } catch { return ""; } };
+  async function hermesApi(method, path, body) {
+    const headers = {}; if (settings.key) headers.Authorization = "Bearer " + settings.key; if (body) headers["Content-Type"] = "application/json";
+    let res;
+    try { res = await fetch(apiBase() + "/api" + path, { method, headers, body: body ? JSON.stringify(body) : undefined }); }
+    catch (e) { throw Object.assign(new Error(e.message), { kind: "network" }); }
+    if (!res.ok) throw Object.assign(new Error("http " + res.status), { kind: "http", status: res.status });
+    const t = await res.text(); try { return t ? JSON.parse(t) : {}; } catch { return {}; }
+  }
+  // Chat request with the session tag. If Hermes (or CORS) refuses the tag, send the same request without it so chatting never breaks.
+  async function hfetch(url, init, sid) {
+    const go = (tag) => fetch(url, tag ? { ...init, headers: { ...init.headers, "X-Hermes-Session-Id": sid } } : init);
+    if (!sid || sidOff) return { res: await go(false), sid: "" };
+    let res;
+    try { res = await go(true); }
+    catch (e) { if (e.name === "AbortError") throw e; const r2 = await go(false); if (r2.ok) sidOff = true; return { res: r2, sid: "" }; }
+    if (res.ok || ![400, 409, 422].includes(res.status)) return { res, sid };
+    const r2 = await go(false);
+    if (r2.ok && res.status !== 409) sidOff = true;
+    return { res: r2, sid: "" };
+  }
+  const auxId = () => AUX + uid();
+  const dropAux = (sid) => { if (sid && canApi()) hermesApi("DELETE", "/sessions/" + encodeURIComponent(sid)).catch(() => {}); };
+  const dropHermes = (sid) => (isJammySid(sid) && canApi() ? hermesApi("DELETE", "/sessions/" + encodeURIComponent(sid)).then(() => true, () => false) : Promise.resolve(false));
+
+  const tms = (v) => { if (v == null || v === "") return 0; if (typeof v === "string" && !/^[\d.]+$/.test(v.trim())) { const d = Date.parse(v); return isNaN(d) ? 0 : d; } const n = +v; return !n ? 0 : n < 1e11 ? n * 1000 : n; };
+  const listFrom = (j) => (Array.isArray(j) ? j : (j && (j.sessions || j.items || j.data || j.results)) || []);
+  function normSession(r) {
+    if (!r || typeof r !== "object") return null;
+    const id = r.id || r.session_id; if (!id) return null;
+    return { id: String(id), title: String(r.title || r.name || "").trim(), preview: String(r.preview || r.first_message || r.summary || "").replace(/\s+/g, " ").trim(), source: String(r.source || r.platform || r.origin || "").toLowerCase(), at: tms(r.last_active ?? r.updated_at ?? r.ended_at ?? r.started_at ?? r.created_at), count: +(r.message_count ?? r.messages_count ?? 0) || 0 };
+  }
+  const remoteError = (e) => (e.kind === "network" ? "can't reach Hermes's sessions API (is it enabled, and does CORS allow this page?)" : e.status === 401 || e.status === 403 ? "Hermes rejected the key" : e.status === 404 ? "this Hermes has no sessions API" : "Hermes returned " + e.status);
+  function resetRemote() { remote = { list: [], raw: 0, loading: false, loaded: false, error: "", more: false, at: 0 }; }
+  async function loadRemote(more) {
+    if (!wantsHermes()) { resetRemote(); renderHistory(); return; }
+    if (settings.demo) { remote = { ...remote, list: demoRemote(), loaded: true, error: "", more: false, at: Date.now() }; renderHistory(); return; }
+    if (!canApi()) { resetRemote(); renderHistory(); return; }
+    if (remote.loading) return;
+    remote.loading = true; remote.error = ""; renderHistory();
+    const off = more ? remote.raw : 0, lim = more ? PAGE_N : Math.min(200, Math.max(PAGE_N, remote.raw)); // a refresh keeps as many as were already loaded
+    try {
+      const j = await hermesApi("GET", `/sessions?limit=${lim}&offset=${off}`);
+      const raw = listFrom(j); const got = raw.map(normSession).filter(Boolean);
+      remote.list = more ? remote.list.concat(got.filter((g) => !remote.list.some((x) => x.id === g.id))) : got;
+      remote.raw = off + raw.length; remote.loaded = true;
+      remote.more = raw.length > 0 && (j && typeof j.total === "number" ? remote.raw < j.total : raw.length >= lim);
+    } catch (e) { remote.error = remoteError(e); }
+    finally { remote.loading = false; remote.at = Date.now(); renderHistory(); }
+  }
+
+  const chatHids = () => new Set(convs.flatMap((c) => c.hids || (c.hid ? [c.hid] : [])));
+  const kindOf = (s) => (isJammySid(s.id) ? "jammy" : s.source || "hermes");
+  const labelOf = (s) => (isJammySid(s.id) ? "Jammy" : SRC[s.source] || (s.source ? s.source.replace(/[_-]+/g, " ") : "Hermes"));
+  const sTitle = (s) => s.title || s.preview.slice(0, 60) || "Untitled session";
+  function histRows() {
+    const q = query.toLowerCase(), f = ui.hfilter || "all", rows = [];
+    convs.forEach((c) => {
+      if (f === "other") return;
+      if (q && !(c.title.toLowerCase().includes(q) || c.messages.some((m) => (m.content || "").toLowerCase().includes(q)))) return;
+      rows.push({ local: c, id: c.id, title: c.title || "New chat", at: c.updated, kind: c.kept ? "jammy" : "local" });
+    });
+    if (wantsHermes() && (settings.demo || canApi())) {
+      const mine = chatHids();
+      remote.list.forEach((s) => {
+        if (s.id.startsWith(AUX) || mine.has(s.id)) return;
+        const kind = kindOf(s); if (f === "jammy" && kind !== "jammy") return; if (f === "other" && kind === "jammy") return;
+        const t = sTitle(s); if (q && !(t.toLowerCase().includes(q) || s.preview.toLowerCase().includes(q))) return;
+        rows.push({ remote: s, id: "r:" + s.id, title: t, at: s.at, kind });
+      });
+    }
+    return rows.sort((a, b) => b.at - a.at);
+  }
+  let armed = "", armedT = 0;
+  const arm = (id) => { armed = id; clearTimeout(armedT); armedT = setTimeout(() => { armed = ""; renderHistory(); }, 3500); renderHistory(); };
   function renderHistory() {
+    const showH = wantsHermes() && (settings.demo || canApi());
+    $("hfilter").hidden = !showH; $("hfilter").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.f === (ui.hfilter || "all"))));
+    const note = $("hnote"); let msg = "", err = false, retry = false;
+    if (wantsHermes() && !settings.demo && !canApi()) msg = "Add your API key in Settings to see Hermes sessions here.";
+    else if (showH && settings.demo) msg = "Sample Hermes sessions (demo mode).";
+    else if (showH && remote.error) { msg = "Hermes history unavailable: " + remote.error + "."; err = true; retry = true; }
+    else if (showH && remote.loading && !remote.loaded) msg = "Loading Hermes sessions…";
+    else if (sidOff && settings.keepInHermes !== false) { msg = "Hermes didn't accept the session tag, so new chats aren't being kept there. Check the Hermes version and CORS."; err = true; }
+    note.hidden = !msg; note.className = "hnote" + (err ? " err" : ""); note.textContent = msg;
+    if (retry) { const b = document.createElement("button"); b.type = "button"; b.textContent = "Retry"; b.onclick = () => loadRemote(); note.appendChild(b); }
+
     const nav = $("convs"); nav.innerHTML = "";
-    $("histCount").textContent = convs.length ? convs.length + (convs.length > 1 ? " chats" : " chat") : "";
-    const q = query.toLowerCase();
-    const list = [...convs].filter((c) => !q || c.title.toLowerCase().includes(q) || c.messages.some((m) => (m.content || "").toLowerCase().includes(q))).sort((a, b) => b.updated - a.updated);
-    if (!list.length) { nav.innerHTML = `<div class="eyebrow">${convs.length ? "No matches" : "No chats yet"}</div>`; return; }
+    const rows = histRows();
+    $("histCount").textContent = rows.length ? rows.length + (rows.length > 1 ? " chats" : " chat") : "";
+    if (!rows.length) nav.innerHTML = `<div class="eyebrow">${query || (ui.hfilter && ui.hfilter !== "all") ? "No matches" : remote.loading ? "Loading…" : "No chats yet"}</div>`;
     const day = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
     const today = day(Date.now()); let lastLabel = "";
-    list.forEach((c) => {
-      const d = day(c.updated); const label = d === today ? "Today" : d === today - 864e5 ? "Yesterday" : "Earlier";
+    rows.forEach((r) => {
+      const d = r.at ? day(r.at) : 0; const label = d === today ? "Today" : d === today - 864e5 ? "Yesterday" : "Earlier";
       if (label !== lastLabel) { const l = document.createElement("div"); l.className = "eyebrow"; l.textContent = label; nav.appendChild(l); lastLabel = label; }
-      const b = document.createElement("button"); b.type = "button"; b.className = "conv" + (c.id === activeId ? " active" : "");
-      b.innerHTML = `<span class="t"></span><span class="del" role="button" aria-label="Delete chat"><svg width="15" height="15"><use href="#i-trash"/></svg></span>`;
-      b.querySelector(".t").textContent = c.title || "New chat";
-      b.onclick = (e) => { if (e.target.closest(".del")) { deleteConv(c.id); return; } open(c.id); };
+      const canDel = !!r.local || isJammySid(r.remote.id); const isArmed = canDel && armed === r.id;
+      const chip = r.kind === "jammy" ? ["Jammy", "jammy", r.local ? "Started in Jammy and kept in Hermes" : "Started in Jammy, kept in Hermes"] : r.kind === "local" ? ["Local", "", "Only saved in this browser"] : [labelOf(r.remote), "", "From Hermes (" + labelOf(r.remote) + ")"];
+      const b = document.createElement("button"); b.type = "button"; b.className = "conv" + (r.id === activeId ? " active" : "");
+      b.innerHTML = `<span class="t"></span>${isArmed ? "" : `<span class="src ${chip[1]}" title="${esc(chip[2])}">${esc(chip[0])}</span>`}${canDel ? `<span class="del${isArmed ? " armed" : ""}" role="button" aria-label="Delete chat">${isArmed ? "" : '<svg width="15" height="15"><use href="#i-trash"/></svg>'}</span>` : ""}`;
+      b.querySelector(".t").textContent = r.title; b.title = r.title;
+      const del = b.querySelector(".del");
+      if (isArmed) { del.textContent = r.local ? "Delete in Hermes too?" : "Delete from Hermes?"; del.setAttribute("aria-label", "Confirm: " + del.textContent); }
+      b.onclick = (e) => {
+        if (e.target.closest(".del")) {
+          const risky = r.remote || (r.local.hids && r.local.hids.length);
+          if (risky && !isArmed) { arm(r.id); return; }
+          armed = ""; if (r.local) deleteConv(r.local.id); else deleteRemote(r.remote);
+          return;
+        }
+        if (r.local) open(r.local.id); else openRemote(r.remote);
+      };
       nav.appendChild(b);
     });
+    if (showH && !settings.demo && remote.more && !query) { const m = document.createElement("button"); m.type = "button"; m.className = "hmore"; m.textContent = remote.loading ? "Loading…" : "Show older Hermes sessions"; m.onclick = () => loadRemote(true); nav.appendChild(m); }
   }
-  function open(id) { activeId = id; save(); renderAll(); if (isPhone()) closeNav(); }
+  function open(id) { view = null; activeId = id; save(); renderAll(); if (isPhone()) closeNav(); }
+
+  // A Hermes session, opened for reading (and continuing, which copies it into a Jammy chat)
+  async function openRemote(s) {
+    const id = "r:" + s.id;
+    const v = view = { id, remote: true, readonly: true, sid: s.id, own: isJammySid(s.id), label: labelOf(s), title: sTitle(s), messages: [], loading: true, failed: "", created: s.at, updated: s.at, demo: !!s.demo };
+    activeId = id; save(); renderAll(); if (isPhone()) closeNav();
+    try { v.messages = normMessages(settings.demo ? demoMessages(s) : await hermesApi("GET", `/sessions/${encodeURIComponent(s.id)}/messages?inline_images=false`)); }
+    catch (e) { v.failed = remoteError(e); }
+    v.loading = false;
+    if (view === v && activeId === id) { renderChat(); renderTrace(); updateSend(); }
+  }
+  // Turn the session being viewed into a Jammy chat. A session Jammy started carries on in the same Hermes session; one
+  // from another app can't be continued through the API, so it becomes a new Jammy chat that starts from its transcript.
+  function adopt(v) {
+    const own = v.own && !v.demo;
+    const c = { id: uid(), title: own ? v.title : "Continued: " + v.title, messages: v.messages, created: v.created || Date.now(), updated: Date.now() };
+    if (own) { c.hid = v.sid; c.hids = [v.sid]; c.kept = true; } else c.from = v.label;
+    convs.push(c); view = null; activeId = c.id; save();
+    return c;
+  }
+  function continueView() { const v = active(); if (!v || !v.readonly || v.loading) return; adopt(v); renderAll(); input.focus(); }
+  function remoteNote(v) {
+    const n = document.createElement("div"); n.className = "remote-note";
+    n.innerHTML = v.own ? `<span><b>Started in Jammy</b> and kept in Hermes. Reply to pick it up here.</span><button type="button">Continue</button>` : `<span><b>${esc(v.label)}</b> session from Hermes, read-only. Reply to carry on as a new Jammy chat.</span><button type="button">Continue in Jammy</button>`;
+    n.querySelector("button").onclick = continueView;
+    return n;
+  }
+  async function deleteRemote(s) {
+    remote.list = remote.list.filter((x) => x.id !== s.id);
+    if (activeId === "r:" + s.id) { view = null; activeId = null; save(); renderAll(); } else renderHistory();
+    if (!(await dropHermes(s.id))) { loadRemote(); }
+  }
+  // Which Hermes session a chat's next turn goes to. Editing or regenerating rewrites the chat's history, so those turns
+  // start a fresh session (Hermes's copy is append-only); the old one stays in Hermes as it was.
+  function keepSid(c) {
+    if (!settings.keepInHermes || settings.demo) return "";
+    c.hids = c.hids || [];
+    if (!c.hid || c.fork) { c.hid = JAMMY + c.id + (c.hids.length ? "-" + (c.hids.length + 1) : ""); c.hids.push(c.hid); c.fork = false; }
+    return c.hid;
+  }
+  function afterKept(c) {
+    const tag = c.hid + "|" + c.title;
+    if (c.hid && c.title && c.titleTag !== tag) { c.titleTag = tag; hermesApi("PATCH", "/sessions/" + encodeURIComponent(c.hid), { title: c.title }).catch(() => {}); }
+    setTimeout(() => { if (wantsHermes() && canApi()) loadRemote(); }, 1500);
+  }
+
+  // Messages from /api/sessions/{id}/messages (OpenAI-style rows) -> Jammy replies: a run of assistant and tool rows is one reply
+  const textOf = (c) => (typeof c === "string" ? c : Array.isArray(c) ? c.map((p) => (typeof p === "string" ? p : p && p.type === "text" ? p.text || "" : p && /image/.test(p.type || "") ? "[image]" : "")).filter(Boolean).join("\n") : "");
+  const TOOL_EMOJI = { terminal: "💻", shell: "💻", bash: "💻", read_file: "📂", write_file: "📝", patch: "✏️", edit_file: "✏️", search_files: "🔎", web_search: "🔍", web_extract: "🌐", browser: "🌐", memory: "🧠", execute_code: "🐍", todo: "📋", delegate_task: "🧩" };
+  const briefArgs = (args) => { let d = args; try { const o = JSON.parse(args); const v = o && typeof o === "object" ? (o.command ?? o.path ?? o.file_path ?? o.query ?? o.url ?? Object.values(o).find((x) => typeof x === "string") ?? JSON.stringify(o)) : o; d = typeof v === "string" ? v : JSON.stringify(v); } catch {} return JSON.stringify(String(d == null ? "" : d).replace(/\s+/g, " ").replace(/`/g, "'").slice(0, 150)); };
+  function normMessages(j) {
+    const arr = Array.isArray(j) ? j : (j && (j.messages || j.items || j.data)) || [];
+    const out = [], counts = new Map(), calls = {}; let cur = null;
+    const when = (r) => tms(r.timestamp ?? r.created_at ?? r.time);
+    arr.forEach((r) => {
+      if (!r || typeof r !== "object") return;
+      const text = textOf(r.content).trim();
+      if (r.role === "user") { cur = null; if (text) out.push({ id: uid(), role: "user", content: text, t: when(r) }); return; }
+      if (r.role === "assistant") {
+        if (!cur) { cur = { id: uid(), role: "assistant", content: "", t: when(r), tt: [], full: {} }; out.push(cur); }
+        const rs = r.reasoning_content || r.reasoning; if (typeof rs === "string" && rs.trim()) cur.reasoning = (cur.reasoning ? cur.reasoning + "\n\n" : "") + rs.trim();
+        if (text) cur.content += (cur.content && !cur.content.endsWith("\n") ? "\n" : "") + text + "\n";
+        (r.tool_calls || []).forEach((tc) => {
+          const f = (tc && tc.function) || tc || {}; const name = String(f.name || "tool"); let args = f.arguments; if (args && typeof args !== "string") args = JSON.stringify(args);
+          const k = counts.get(cur) || 0; counts.set(cur, k + 1);
+          cur.content += "`" + (TOOL_EMOJI[name] || "🔧") + " " + name + (args ? ": " + briefArgs(args) : "") + "`\n";
+          cur.full[k] = args ? prettyArgs(args) : name;
+          if (tc && tc.id) calls[tc.id] = { m: cur, k };
+        });
+        return;
+      }
+      if (r.role === "tool") { const c = calls[r.tool_call_id]; if (c && text) c.m.full[c.k] += "\n\n→ " + text.slice(0, 3000); }
+    });
+    return out.filter((m) => m.role === "user" || m.content.trim()).map((m) => { if (m.role === "assistant") m.content = m.content.trimEnd(); return m; });
+  }
+  // Sample sessions for the demo preview
+  function demoRemote() {
+    const now = Date.now(), H = 36e5;
+    return [
+      { id: "jammy-demo-week", title: "Plan my week", preview: "", source: "api_server", at: now - 2 * H },
+      { id: "20261116_223012_a1b2c3", title: "Fix the nightly backup script", preview: "", source: "cli", at: now - 15 * H },
+      { id: "20261116_081455_d4e5f6", title: "Morning briefing", preview: "", source: "telegram", at: now - 27 * H },
+      { id: "20261114_193302_9a8b7c", title: "Which sites did I read about GPUs?", preview: "", source: "discord", at: now - 74 * H },
+    ].map((s) => ({ ...s, count: 4, demo: true }));
+  }
+  function demoMessages(s) {
+    const call = (id, name, args) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
+    if (s.id === "20261116_223012_a1b2c3") return [
+      { role: "user", content: "the nightly backup keeps failing, can you look?" },
+      { role: "assistant", content: "On it.", tool_calls: [call("c1", "terminal", { command: "tail -n 20 ~/logs/backup.log" })] },
+      { role: "tool", tool_call_id: "c1", content: "rsync: failed to set times on \"/mnt/backup\": Operation not permitted\nrsync error: some files could not be transferred (code 23)" },
+      { role: "assistant", content: "Found it: the backup disk is mounted without permission to set timestamps. Add `--no-times` to the rsync line, or remount the disk with your user as owner. Want me to make the change?" },
+    ];
+    if (s.id === "20261116_081455_d4e5f6") return [
+      { role: "user", content: "morning! what's on today?" },
+      { role: "assistant", content: "Morning. Three things: the 10:00 sync, a dentist reminder at 15:30, and the backup script still needs a decision. Want a short plan?" },
+    ];
+    if (isJammySid(s.id)) return [
+      { role: "user", content: "Plan my week around three priorities" },
+      { role: "assistant", content: "Happy to. Tell me the three priorities and any fixed commitments, and I'll lay out a week that protects focus time for each." },
+    ];
+    return [{ role: "user", content: s.title }, { role: "assistant", content: "This is a sample session for the preview. With your own Hermes connected, the real transcript shows up here." }];
+  }
 
   const bucket = () => { const h = new Date().getHours(); return h >= 23 || h < 5 ? "late" : h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"; };
   const recentChats = () => convs.filter((c) => c.messages.length).sort((a, b) => b.updated - a.updated);
@@ -712,7 +955,8 @@ button { cursor: pointer; }
       const messages = [];
       if (settings.persona && settings.prompt.trim()) messages.push({ role: "system", content: settings.prompt.trim() });
       messages.push({ role: "user", content: brief });
-      const res = await fetch(settings.endpoint, { method: "POST", signal: ctl.signal, headers: { "Content-Type": "application/json", "Authorization": "Bearer " + settings.key }, body: JSON.stringify({ model: settings.model || "hermes-agent", messages, stream: false }) });
+      const { res, sid: aux } = await hfetch(settings.endpoint, { method: "POST", signal: ctl.signal, headers: { "Content-Type": "application/json", "Authorization": "Bearer " + settings.key }, body: JSON.stringify({ model: settings.model || "hermes-agent", messages, stream: false }) }, auxId());
+      dropAux(aux);
       if (!res.ok) throw new Error("http " + res.status);
       const j = await res.json(); const txt = j.choices?.[0]?.message?.content || "";
       const data = JSON.parse((txt.match(/\{[\s\S]*\}/) || [""])[0]);
@@ -745,7 +989,8 @@ button { cursor: pointer; }
   async function aiFollowups(q, a, signal) {
     const brief = `Here is an exchange from a chat.\n\nThe user asked: ${q.slice(0, 600)}\n\nYou answered: ${a.slice(0, 1800)}\n\nSuggest 3 follow-up questions the user is likely to ask next. Write each one the way the user would type it to you (first person, e.g. "How do I…?"), specific to this exchange, at most 12 words, and different in kind: one that digs deeper, one that applies it or asks for the next step, and one that questions or double-checks it. Do not use any tools. Reply with ONLY a JSON array of 3 strings, no markdown fences.`;
     const headers = { "Content-Type": "application/json" }; if (settings.key) headers.Authorization = "Bearer " + settings.key;
-    const res = await fetch(settings.endpoint, { method: "POST", signal, headers, body: JSON.stringify({ model: settings.model || "hermes-agent", messages: [{ role: "user", content: brief }], stream: false, reasoning_effort: "low" }) });
+    const { res, sid: aux } = await hfetch(settings.endpoint, { method: "POST", signal, headers, body: JSON.stringify({ model: settings.model || "hermes-agent", messages: [{ role: "user", content: brief }], stream: false, reasoning_effort: "low" }) }, auxId());
+    dropAux(aux);
     if (!res.ok) throw new Error("http " + res.status);
     const j = await res.json(); const txt = j.choices?.[0]?.message?.content || "";
     const arr = JSON.parse((txt.match(/\[[\s\S]*\]/) || [""])[0]);
@@ -772,7 +1017,7 @@ button { cursor: pointer; }
     const box = d.querySelector(".follow"); if (!box) return;
     box.innerHTML = "";
     const a = stripTools(m.content || "");
-    const show = d.classList.contains("last") && !(streaming && streaming.msgId === m.id) && !m.error && !m.stopped && a;
+    const show = d.classList.contains("last") && !c.readonly && !(streaming && streaming.msgId === m.id) && !m.error && !m.stopped && a;
     box.hidden = !show; if (!show) return;
     box.setAttribute("role", "group"); box.setAttribute("aria-label", "Suggested follow-up questions");
     if (followBusy === m.id && !m.follow) { box.innerHTML = '<div class="fcard skel" aria-hidden="true"><span class="ico">↳</span><span class="q"></span></div>'.repeat(3); return; }
@@ -818,12 +1063,12 @@ button { cursor: pointer; }
     if (m.role === "user") {
       d.className = "msg user"; d.innerHTML = `<div class="bubble"></div>`; d.firstChild.textContent = m.content;
       const lastUser = !conv.messages.slice(idx + 1).some((x) => x.role === "user");
-      if (lastUser && !streaming) { const e = document.createElement("button"); e.type = "button"; e.className = "edit"; e.textContent = "Edit"; e.onclick = () => editFrom(conv, idx); d.appendChild(e); }
+      if (lastUser && !streaming && !conv.readonly) { const e = document.createElement("button"); e.type = "button"; e.className = "edit"; e.textContent = "Edit"; e.onclick = () => editFrom(conv, idx); d.appendChild(e); }
       return d;
     }
     d.className = "msg bot" + (isLast ? " last" : "");
     d.innerHTML = `${jam()}<div class="mbody"><div class="parts"></div><div class="foot"></div><div class="follow" hidden></div></div>`;
-    fillBot(d, m, isLast); fillFollow(d, m, conv);
+    fillBot(d, m, isLast && !conv.readonly); fillFollow(d, m, conv);
     const face = d.querySelector(":scope > .jam");
     face.removeAttribute("aria-hidden"); face.setAttribute("role", "button"); face.setAttribute("tabindex", "0"); face.setAttribute("aria-label", "Show thinking and tool calls");
     face.onclick = () => openTrace(m.id);
@@ -873,11 +1118,18 @@ button { cursor: pointer; }
 
 
   function renderChat() {
-    const c = active();
-    $("chatTitle").textContent = c && c.messages.length ? c.title : "New chat";
-    column.classList.toggle("is-empty", !c || !c.messages.length);
-    if (!c || !c.messages.length) renderEmpty();
-    else { column.innerHTML = ""; c.messages.forEach((m, i) => column.appendChild(msgEl(m, i, c))); renderQueue(); scrollDown(true); }
+    const c = active(); const rv = !!(c && c.remote);
+    $("chatTitle").textContent = c && (c.messages.length || rv) ? c.title : "New chat";
+    column.classList.toggle("is-empty", !c || (!c.messages.length && !rv));
+    if (!c || (!c.messages.length && !rv)) renderEmpty();
+    else {
+      column.innerHTML = "";
+      if (rv) {
+        column.appendChild(remoteNote(c));
+        if (!c.messages.length) { const e = document.createElement("div"); e.className = "remote-state"; e.textContent = c.loading ? "Loading from Hermes…" : c.failed ? "Couldn't load this session: " + c.failed + "." : "This session has no messages."; column.appendChild(e); }
+      }
+      c.messages.forEach((m, i) => column.appendChild(msgEl(m, i, c))); renderQueue(); scrollDown(true);
+    }
   }
   function updateLive(m) { const d = column.querySelector(`.msg[data-id="${m.id}"]`); if (d) fillBot(d, m, true); scrollDown(); renderTrace(); }
 
@@ -948,9 +1200,14 @@ button { cursor: pointer; }
 
   // ---------- Conversations ----------
   function newConv() { const c = { id: uid(), title: "New chat", messages: [], created: Date.now(), updated: Date.now() }; convs.push(c); activeId = c.id; save(); return c; }
-  function deleteConv(id) { if (streaming && streaming.convId === id) stop(); convs = convs.filter((c) => c.id !== id); if (activeId === id) activeId = null; save(); renderAll(); }
+  function deleteConv(id) {
+    const gone = convs.find((c) => c.id === id);
+    if (streaming && streaming.convId === id) stop();
+    convs = convs.filter((c) => c.id !== id); if (activeId === id) activeId = null; save(); renderAll();
+    if (gone && gone.hids) Promise.all(gone.hids.map(dropHermes)).then(() => { if (wantsHermes() && canApi()) loadRemote(); });
+  }
   const titleFrom = (s) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > 42 ? t.slice(0, 40).trimEnd() + "…" : t || "New chat"; };
-  function editFrom(c, idx) { if (streaming) return; input.value = c.messages[idx].content; c.messages = c.messages.slice(0, idx); save(); renderAll(); autosize(); updateSend(); input.focus(); }
+  function editFrom(c, idx) { if (streaming || c.readonly) return; if (c.hid) c.fork = true; input.value = c.messages[idx].content; c.messages = c.messages.slice(0, idx); save(); renderAll(); autosize(); updateSend(); input.focus(); }
 
   // ---------- Sending ----------
   const input = $("input"), sendBtn = $("sendBtn"), composer = $("composer");
@@ -960,7 +1217,8 @@ button { cursor: pointer; }
     if (streaming && !(has && canAdd())) { sendBtn.disabled = false; sendBtn.innerHTML = `<svg width="17" height="17"><use href="#i-stop"/></svg>`; sendBtn.setAttribute("aria-label", "Stop"); sendBtn.title = "Stop"; }
     else if (streaming) { sendBtn.disabled = false; sendBtn.innerHTML = `<svg width="19" height="19"><use href="#i-up"/></svg>`; sendBtn.setAttribute("aria-label", "Add message"); sendBtn.title = "Add to this reply. Ctrl+Enter steers now."; }
     else { sendBtn.disabled = !has; sendBtn.innerHTML = `<svg width="19" height="19"><use href="#i-up"/></svg>`; sendBtn.setAttribute("aria-label", "Send"); sendBtn.title = "Send"; }
-    input.placeholder = streaming && canAdd() ? "Add another message…" : "Ask Jammy anything…";
+    const vc = active();
+    input.placeholder = streaming && canAdd() ? "Add another message…" : vc && vc.readonly ? "Reply to carry on in Jammy…" : "Ask Jammy anything…";
   }
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 220) + "px"; };
   input.addEventListener("input", () => { autosize(); updateSend(); store.set("draft", input.value); });
@@ -979,14 +1237,16 @@ button { cursor: pointer; }
 
   function send(text) {
     if (streaming) return;
-    let c = active(); if (!c) c = newConv();
+    let c = active(); if (c && c.readonly) { if (c.loading) return; c = adopt(c); }
+    if (!c) c = newConv();
     if (!c.messages.length) c.title = titleFrom(text);
     c.messages.push({ id: uid(), role: "user", content: text, t: Date.now() });
     input.value = ""; store.set("draft", ""); autosize();
     run(c);
   }
   function regenerate() {
-    const c = active(); if (!c || streaming) return;
+    const c = active(); if (!c || streaming || c.readonly) return;
+    if (c.hid) c.fork = true;
     while (c.messages.length && c.messages[c.messages.length - 1].role === "assistant") c.messages.pop();
     if (c.messages.length) run(c);
   }
@@ -1068,6 +1328,7 @@ button { cursor: pointer; }
     const controller = new AbortController();
     const t0 = performance.now();
     streaming = { convId: c.id, msgId: m.id, controller, t0, steer: false, userStop: false };
+    const sid = keepSid(c);
     save(); renderHistory(); renderChat(); updateSend(); scrollDown(true); renderTrace(false, true);
 
     let frame = 0;
@@ -1081,6 +1342,7 @@ button { cursor: pointer; }
     const toolCalls = {};
     let tf = 0;
     const sink = {
+      sid,
       think: (s) => { m.reasoning = (m.reasoning || "") + s; if (traceOpen && activeId === c.id && !tf) tf = requestAnimationFrame(() => { tf = 0; renderTrace(); }); },
       full: (s) => { const k = parseContent(m.content, false).toolCount; (m.full || (m.full = {}))[k] = s; },
     };
@@ -1095,6 +1357,7 @@ button { cursor: pointer; }
       const now = Date.now(); m.tt.forEach((t) => { if (!t.e) t.e = now; });
       m.ms = Math.round(performance.now() - t0);
       const info = streaming; streaming = null; c.updated = Date.now();
+      if (sink.kept) { c.kept = true; afterKept(c); }
       const next = takeQueue(c, m, info);
       save();
       if (tf) cancelAnimationFrame(tf);
@@ -1114,14 +1377,15 @@ button { cursor: pointer; }
     if (!settings.key) throw Object.assign(new Error("nokey"), { kind: "nokey" });
     let res;
     try {
-      res = await fetch(settings.endpoint, {
+      const out = await hfetch(settings.endpoint, {
         method: "POST", signal,
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + settings.key, "Accept": "text/event-stream" },
         body: JSON.stringify({ model: settings.model || "hermes-agent", messages, stream: true, reasoning_effort: EFFORT[settings.mood] || "low" }),
-      });
+      }, sink.sid);
+      res = out.res; sink.sid = out.sid;
     } catch (e) { if (e.name === "AbortError") throw e; throw Object.assign(new Error(e.message), { kind: "network" }); }
     if (!res.ok) { let body = ""; try { body = await res.text(); } catch {} throw Object.assign(new Error(body.slice(0, 400)), { kind: "http", status: res.status }); }
-    settings._ok = true;
+    settings._ok = true; if (sink.sid) sink.kept = true;
     const ctype = res.headers.get("content-type") || "";
     if (!ctype.includes("event-stream") || !res.body) { const j = await res.json(); const msg = j.choices?.[0]?.message || {}; const r = msg.reasoning_content || msg.reasoning; if (typeof r === "string" && r) sink.think(r); push(msg.content || ""); return; }
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
@@ -1217,14 +1481,14 @@ button { cursor: pointer; }
   const drawer = $("drawer"), scrim = $("scrim"), app = $("app");
   function openSettings() {
     $("sEndpoint").value = settings.endpoint; $("sKey").value = settings.key; $("sModel").value = settings.model; $("sName").value = settings.name;
-    $("sPersona").checked = settings.persona; $("sGreet").checked = settings.aiGreet; $("sFollow").checked = settings.aiFollow; $("sPrompt").value = settings.prompt; $("sDemo").checked = settings.demo;
+    $("sPersona").checked = settings.persona; $("sGreet").checked = settings.aiGreet; $("sFollow").checked = settings.aiFollow; $("sKeep").checked = settings.keepInHermes !== false; $("sShow").checked = settings.showHermes !== false; $("sPrompt").value = settings.prompt; $("sDemo").checked = settings.demo;
     $("testOut").hidden = true; drawer.hidden = false; scrim.hidden = false; closeNav(true);
   }
   function closeSettings() { drawer.hidden = true; syncScrim(); }
-  const readForm = () => ({ endpoint: $("sEndpoint").value.trim() || "http://127.0.0.1:8642/v1/chat/completions", key: $("sKey").value.trim(), model: $("sModel").value.trim() || "hermes-agent", name: $("sName").value.trim(), persona: $("sPersona").checked, aiGreet: $("sGreet").checked, aiFollow: $("sFollow").checked, prompt: $("sPrompt").value || DEFAULT_PERSONA, demo: $("sDemo").checked });
+  const readForm = () => ({ endpoint: $("sEndpoint").value.trim() || "http://127.0.0.1:8642/v1/chat/completions", key: $("sKey").value.trim(), model: $("sModel").value.trim() || "hermes-agent", name: $("sName").value.trim(), persona: $("sPersona").checked, aiGreet: $("sGreet").checked, aiFollow: $("sFollow").checked, keepInHermes: $("sKeep").checked, showHermes: $("sShow").checked, prompt: $("sPrompt").value || DEFAULT_PERSONA, demo: $("sDemo").checked });
   $("openSettings").onclick = openSettings;
   $("closeSettings").onclick = closeSettings; $("cancelSettings").onclick = closeSettings;
-  $("saveSettings").onclick = () => { const f = readForm(); if (f.endpoint !== settings.endpoint || f.key !== settings.key) delete settings._ok; Object.assign(settings, f); persist(); closeSettings(); renderAll(); };
+  $("saveSettings").onclick = () => { const f = readForm(); if (f.endpoint !== settings.endpoint || f.key !== settings.key) delete settings._ok; Object.assign(settings, f); persist(); closeSettings(); sidOff = false; resetRemote(); renderAll(); loadRemote(); };
   $("toggleKey").onclick = () => { const k = $("sKey"); const show = k.type === "password"; k.type = show ? "text" : "password"; $("toggleKey").textContent = show ? "Hide" : "Show"; };
   $("testBtn").onclick = async () => {
     const f = readForm(); const out = $("testOut"); out.hidden = false; out.className = "test-out"; out.textContent = "Checking…";
@@ -1240,9 +1504,12 @@ button { cursor: pointer; }
   function syncScrim() { scrim.hidden = drawer.hidden && !app.classList.contains("nav-open"); }
   function closeNav(keepScrim) { app.classList.remove("nav-open"); if (!keepScrim) syncScrim(); }
   $("histBtn").onclick = () => {
-    if (isPhone()) { app.classList.toggle("nav-open"); syncScrim(); renderChrome(); return; }
-    ui.hist = !ui.hist; store.set("ui", ui); renderChrome(); if (ui.hist) setTimeout(() => $("search").focus(), 220);
+    const stale = () => { if (Date.now() - remote.at > 20000) loadRemote(); };
+    if (isPhone()) { app.classList.toggle("nav-open"); syncScrim(); renderChrome(); if (app.classList.contains("nav-open")) stale(); return; }
+    ui.hist = !ui.hist; store.set("ui", ui); renderChrome(); if (ui.hist) { setTimeout(() => $("search").focus(), 220); stale(); }
   };
+  $("hfilter").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; ui.hfilter = b.dataset.f; store.set("ui", ui); renderHistory(); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - remote.at > 60000) loadRemote(); });
   scrim.onclick = () => { closeSettings(); closeNav(); syncScrim(); };
   $("homeBtn").onclick = () => { if (streaming) stop(); activeId = null; save(); renderAll(); closeNav(); input.focus(); };
   $("search").addEventListener("input", (e) => { query = e.target.value; renderHistory(); });
@@ -1259,6 +1526,7 @@ button { cursor: pointer; }
   // ---------- Boot ----------
   input.value = store.get("draft", ""); autosize();
   renderAll();
+  loadRemote();
 })();
 </script>
 </body>

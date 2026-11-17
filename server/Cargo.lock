@@ -724,6 +724,7 @@ dependencies = [
  "futures-util",
  "reqwest",
  "rocket",
+ "serde_json",
  "tokio-util",
 ]
 

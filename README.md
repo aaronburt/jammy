@@ -1,9 +1,10 @@
 # Jammy
 
-A chat window for a Hermes agent, with a jam-jar personality. One small Rust (Rocket) container serves the page and proxies `/v1/*` to Hermes, so there is no CORS setup and the API key stays on the server.
+A chat window for a Hermes agent, with a jam-jar personality. One small Rust (Rocket) container serves the page and proxies it to Hermes, so there is no CORS setup and the API key stays on the server.
 
 - `web/index.html` is the whole UI (a single file).
-- `server/` is the Rocket server that serves it and proxies `/v1/*` to Hermes.
+- `server/` is the Rocket server that serves it and proxies `/v1/*` (chat) and `/api/sessions` (History) to Hermes.
+- **History** lists Jammy's chats together with the sessions in Hermes, including ones from the terminal or messaging apps. Chats Jammy starts are tagged with a Hermes session id (`jammy-…`), so Hermes keeps them and you can tell which began in Jammy. It needs a Hermes with the sessions API; the two switches are under Settings → History.
 - `Dockerfile` and the compose files run it. See [docs/docker.md](docs/docker.md).
 
 ## Run it

@@ -1,12 +1,13 @@
 # Jammy in Docker
 
 One small container (a Rust Rocket server, 18 MB image) that serves Jammy and
-passes `/v1/*` through to Hermes. The page and the API share one address, so Hermes needs no CORS setup,
-and replies still stream token by token.
+passes `/v1/*` (chat) and the `/api/sessions` routes (History) through to Hermes. The page and the API share
+one address, so Hermes needs no CORS setup, and replies still stream token by token.
 
 ```
 browser ──► jammy container :8080 ──► /            Jammy page
-                                  └─► /v1/...      Hermes API server (:8642)
+                                  ├─► /v1/...      Hermes API server (:8642)
+                                  └─► /api/sessions  Hermes sessions (History)
 ```
 
 ## Folder layout
@@ -91,5 +92,11 @@ empty and let your reverse proxy send the Authorization header.
   break it.
 - `/v1/*` (GET and POST) is forwarded to `HERMES_URL`. The response is passed
   through as it arrives, so streaming works, and closing the tab or pressing
-  Stop closes the connection to Hermes too. Bodies are capped at 20 MB.
+  Stop closes the connection to Hermes too. Bodies are capped at 20 MB. The
+  query string and the `X-Hermes-Session-Id` header are passed on.
+- History uses four routes and nothing else under `/api`: `GET /api/sessions`,
+  `GET /api/sessions/<id>/messages`, `PATCH /api/sessions/<id>` (rename) and
+  `DELETE /api/sessions/<id>`. Rename and delete only work for sessions whose id
+  starts with `jammy-`, i.e. chats Jammy started, so the page can never delete a
+  terminal or Telegram session.
 - `GET /healthz` for the container health check.

@@ -1,5 +1,5 @@
-//! Jammy server: serves the Jammy page and reverse-proxies /v1/* to Hermes,
-//! streaming responses through without buffering.
+//! Jammy server: serves the Jammy page and reverse-proxies /v1/* (chat) and the
+//! /api/sessions routes (History) to Hermes, streaming responses through without buffering.
 //!
 //! Config comes from the environment (.env via docker compose), never the page:
 //!      HERMES_URL (default http://host.docker.internal:8642),
@@ -32,6 +32,22 @@ struct Fwd {
     authorization: Option<String>,
     content_type: Option<String>,
     accept: Option<String>,
+    /// X-Hermes-Session-Id: the Hermes session a chat belongs to (only passed on if it looks like a plain id).
+    session_id: Option<String>,
+    /// The raw query string, passed through untouched (percent-encoding and all).
+    query: Option<String>,
+}
+
+/// Session ids are plain tokens (Jammy's are `jammy-...`); anything else is not forwarded or routed.
+fn safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+}
+
+/// Only sessions Jammy itself created (`jammy-...`) may be renamed or deleted through this server.
+fn is_jammy_id(id: &str) -> bool {
+    safe_id(id) && id.starts_with("jammy-")
 }
 
 #[rocket::async_trait]
@@ -43,6 +59,8 @@ impl<'r> FromRequest<'r> for Fwd {
             authorization: h.get_one("Authorization").map(str::to_owned),
             content_type: h.get_one("Content-Type").map(str::to_owned),
             accept: h.get_one("Accept").map(str::to_owned),
+            session_id: h.get_one("X-Hermes-Session-Id").filter(|v| safe_id(v)).map(str::to_owned),
+            query: r.uri().query().map(|q| q.as_str().to_owned()).filter(|q| !q.is_empty()),
         })
     }
 }
@@ -124,16 +142,15 @@ impl<'r> rocket::response::Responder<'r, 'static> for Proxied {
 
 async fn proxy(
     method: reqwest::Method,
-    path: std::path::PathBuf,
-    query: Option<String>,
+    upstream_path: String,
     fwd: Fwd,
     body: Option<Vec<u8>>,
     cfg: &Config,
 ) -> Result<Proxied, (Status, String)> {
-    let mut url = format!("{}/v1/{}", cfg.upstream, path.display());
-    if let Some(q) = query {
+    let mut url = format!("{}{}", cfg.upstream, upstream_path);
+    if let Some(q) = &fwd.query {
         url.push('?');
-        url.push_str(&q);
+        url.push_str(q);
     }
     let mut req = cfg.client.request(method, &url);
     match (&cfg.key, &fwd.authorization) {
@@ -146,6 +163,9 @@ async fn proxy(
     }
     if let Some(a) = fwd.accept {
         req = req.header("Accept", a);
+    }
+    if let Some(id) = fwd.session_id {
+        req = req.header("X-Hermes-Session-Id", id);
     }
     if let Some(mut b) = body {
         if let Some(m) = &cfg.model {
@@ -173,14 +193,13 @@ async fn proxy(
     Ok(Proxied { status, content_type, body: resp })
 }
 
-#[get("/v1/<path..>?<q..>")]
+#[get("/v1/<path..>")]
 async fn v1_get(
     path: std::path::PathBuf,
-    q: Option<&str>,
     fwd: Fwd,
     cfg: &State<Config>,
 ) -> Result<Proxied, (Status, String)> {
-    proxy(reqwest::Method::GET, path, q.map(str::to_owned), fwd, None, cfg).await
+    proxy(reqwest::Method::GET, format!("/v1/{}", path.display()), fwd, None, cfg).await
 }
 
 #[post("/v1/<path..>", data = "<data>")]
@@ -196,7 +215,44 @@ async fn v1_post(
         .await
         .map_err(|e| (Status::BadRequest, e.to_string()))?
         .into_inner();
-    proxy(reqwest::Method::POST, path, None, fwd, Some(body), cfg).await
+    proxy(reqwest::Method::POST, format!("/v1/{}", path.display()), fwd, Some(body), cfg).await
+}
+
+// ---- History: Hermes's session routes. Only what Jammy uses is exposed, nothing else under /api. ----
+
+#[get("/api/sessions")]
+async fn sessions_list(fwd: Fwd, cfg: &State<Config>) -> Result<Proxied, (Status, String)> {
+    proxy(reqwest::Method::GET, "/api/sessions".into(), fwd, None, cfg).await
+}
+
+#[get("/api/sessions/<id>/messages")]
+async fn session_messages(id: &str, fwd: Fwd, cfg: &State<Config>) -> Result<Proxied, (Status, String)> {
+    if !safe_id(id) {
+        return Err((Status::BadRequest, "jammy: bad session id\n".into()));
+    }
+    proxy(reqwest::Method::GET, format!("/api/sessions/{id}/messages"), fwd, None, cfg).await
+}
+
+#[patch("/api/sessions/<id>", data = "<data>")]
+async fn session_rename(id: &str, fwd: Fwd, data: Data<'_>, cfg: &State<Config>) -> Result<Proxied, (Status, String)> {
+    if !is_jammy_id(id) {
+        return Err((Status::Forbidden, "jammy: only sessions Jammy started (jammy-...) can be changed here\n".into()));
+    }
+    let body = data
+        .open(64.kibibytes())
+        .into_bytes()
+        .await
+        .map_err(|e| (Status::BadRequest, e.to_string()))?
+        .into_inner();
+    proxy(reqwest::Method::PATCH, format!("/api/sessions/{id}"), fwd, Some(body), cfg).await
+}
+
+#[delete("/api/sessions/<id>")]
+async fn session_delete(id: &str, fwd: Fwd, cfg: &State<Config>) -> Result<Proxied, (Status, String)> {
+    if !is_jammy_id(id) {
+        return Err((Status::Forbidden, "jammy: only sessions Jammy started (jammy-...) can be deleted here\n".into()));
+    }
+    proxy(reqwest::Method::DELETE, format!("/api/sessions/{id}"), fwd, None, cfg).await
 }
 
 #[launch]
@@ -220,7 +276,7 @@ fn rocket() -> _ {
         eprintln!("jammy: {e}");
         std::process::exit(1);
     });
-    println!("jammy: proxying /v1/ to {upstream}");
+    println!("jammy: proxying /v1/ and /api/sessions to {upstream}");
     if let Some(m) = &model { println!("jammy: model forced to {m}"); }
     println!(
         "jammy: {}",
@@ -237,5 +293,5 @@ fn rocket() -> _ {
         .merge(("log_level", "normal"));
     rocket::custom(figment)
         .manage(Config { upstream, key, model, page, client })
-        .mount("/", routes![index, healthz, v1_get, v1_post])
+        .mount("/", routes![index, healthz, v1_get, v1_post, sessions_list, session_messages, session_rename, session_delete])
 }
