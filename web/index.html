@@ -1046,7 +1046,7 @@ button { cursor: pointer; }
   async function aiFollowups(q, a, signal) {
     const brief = `${FOLLOW_HEAD}\n\nThe user asked: ${q.slice(0, 600)}\n\nYou answered: ${a.slice(0, 1800)}\n\nSuggest 3 follow-up questions the user is likely to ask next. Write each one the way the user would type it to you (first person, e.g. "How do I…?"), specific to this exchange, at most 12 words, and different in kind: one that digs deeper, one that applies it or asks for the next step, and one that questions or double-checks it. Do not use any tools. Reply with ONLY a JSON array of 3 strings, no markdown fences.`;
     const headers = { "Content-Type": "application/json" }; if (settings.key) headers.Authorization = "Bearer " + settings.key;
-    const { res, sid: aux } = await hfetch(settings.endpoint, { method: "POST", signal, headers, body: JSON.stringify({ model: settings.model || "hermes-agent", messages: [{ role: "user", content: brief }], stream: false, reasoning_effort: "low" }) }, auxId());
+    const { res, sid: aux } = await hfetch(settings.endpoint, { method: "POST", signal, headers, body: JSON.stringify({ model: settings.model || "hermes-agent", messages: [{ role: "user", content: brief }], stream: false, reasoning_effort: "low", model_options: { reasoning_effort: "low" } }) }, auxId());
     dropAux(aux);
     if (!res.ok) throw new Error("http " + res.status);
     const j = await res.json(); const txt = j.choices?.[0]?.message?.content || "";
@@ -1547,7 +1547,7 @@ button { cursor: pointer; }
       const out = await hfetch(settings.endpoint, {
         method: "POST", signal,
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + settings.key, "Accept": "text/event-stream" },
-        body: JSON.stringify({ model: settings.model || "hermes-agent", messages, stream: true, reasoning_effort: EFFORT[settings.mood] || "low" }),
+        body: JSON.stringify({ model: settings.model || "hermes-agent", messages, stream: true, reasoning_effort: EFFORT[settings.mood] || "low", model_options: { reasoning_effort: EFFORT[settings.mood] || "low" } }), // Hermes reads model_options.reasoning_effort; the top-level field is ignored by its API server
       }, sink.sid);
       res = out.res; sink.sid = out.sid;
     } catch (e) { if (e.name === "AbortError") throw e; throw Object.assign(new Error(e.message), { kind: "network" }); }
