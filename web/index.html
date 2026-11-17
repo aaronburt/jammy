@@ -885,7 +885,7 @@ button { cursor: pointer; }
     const slot = $("bannerSlot"); slot.innerHTML = "";
     if (!onClaudeHost || bannerDismissed) return;
     const w = document.createElement("div"); w.style.cssText = "padding-left:max(20px, env(safe-area-inset-left, 0px));padding-right:max(20px, env(safe-area-inset-right, 0px))";
-    w.innerHTML = `<div class="banner"><span><b>Preview.</b> Pages hosted on claude.ai can't reach your computer, so this copy runs in demo mode. Open the local <code>jammy-chat.html</code> to talk to your real Hermes.</span><button type="button" aria-label="Dismiss">✕</button></div>`;
+    w.innerHTML = `<div class="banner"><span><b>Preview.</b> Pages hosted on claude.ai can't reach your computer, so this copy runs in demo mode. Open the local <code>web/index.html</code> to talk to your real Hermes.</span><button type="button" aria-label="Dismiss">✕</button></div>`;
     w.querySelector("button").onclick = () => { bannerDismissed = true; store.set("bannerDismissed", true); renderBanner(); };
     slot.appendChild(w);
   }

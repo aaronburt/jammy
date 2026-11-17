@@ -2,13 +2,14 @@
 
 A chat window for a Hermes agent, with a jam-jar personality. One small Rust (Rocket) container serves the page and proxies `/v1/*` to Hermes, so there is no CORS setup and the API key stays on the server.
 
-- `jammy-chat.html` is the whole UI (a single file).
-- `docker/` has the Dockerfile, compose file and the Rocket server. See [docker/README.md](docker/README.md).
+- `web/index.html` is the whole UI (a single file).
+- `server/` is the Rocket server that serves it and proxies `/v1/*` to Hermes.
+- `Dockerfile` and the compose files run it. See [docs/docker.md](docs/docker.md).
 
 ## Run it
 
 ```sh
-git clone https://github.com/aaronburt/jammy && cd jammy/docker
+git clone https://github.com/aaronburt/jammy && cd jammy
 cp .env.example .env     # set HERMES_URL and HERMES_API_KEY
 docker compose up -d
 ```

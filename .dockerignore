@@ -1,0 +1,5 @@
+*
+!web/index.html
+!server/Cargo.toml
+!server/Cargo.lock
+!server/src/**

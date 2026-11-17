@@ -5,7 +5,7 @@
 //!      HERMES_URL (default http://host.docker.internal:8642),
 //!      HERMES_API_KEY (optional; the server adds the Bearer key),
 //!      HERMES_MODEL (optional; overrides the model name in chat requests),
-//!      JAMMY_PAGE (path to the page, default /app/jammy-chat.html).
+//!      JAMMY_PAGE (path to the page, default /app/index.html).
 
 #[macro_use]
 extern crate rocket;
@@ -211,7 +211,7 @@ fn rocket() -> _ {
     }
     let key = std::env::var("HERMES_API_KEY").ok().filter(|k| !k.is_empty());
     let model = std::env::var("HERMES_MODEL").ok().filter(|m| !m.is_empty());
-    let page_path = std::env::var("JAMMY_PAGE").unwrap_or_else(|_| "/app/jammy-chat.html".into());
+    let page_path = std::env::var("JAMMY_PAGE").unwrap_or_else(|_| "/app/index.html".into());
     let raw = std::fs::read_to_string(&page_path).unwrap_or_else(|e| {
         eprintln!("jammy: can't read {page_path}: {e}");
         std::process::exit(1);

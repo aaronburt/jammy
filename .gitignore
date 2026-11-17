@@ -1,5 +1,7 @@
+# secrets and local config: never commit
 .env
 *.env
 !.env.example
 
+# Rust build output
 target/

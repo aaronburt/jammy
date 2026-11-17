@@ -13,21 +13,20 @@ browser ──► jammy container :8080 ──► /            Jammy page
 
 ```
 jammy/
-├── jammy-chat.html          the page (the image copies it in at build time)
-└── docker/
-    ├── Dockerfile           multi-stage: Rust build -> alpine runtime
-    ├── Dockerfile.dockerignore
-    ├── server/              the Rocket server (Cargo.toml, Cargo.lock, src/main.rs)
-    ├── docker-compose.yml
-    ├── docker-compose.build.yml
-    ├── .env.example
-    └── README.md
+├── web/index.html            the page (the image copies it in at build time)
+├── server/                   the Rocket server (Cargo.toml, Cargo.lock, src/main.rs)
+├── Dockerfile                multi-stage: Rust build -> alpine runtime
+├── docker-compose.yml        runs the published image
+├── docker-compose.build.yml  builds the image from source instead
+├── .env.example
+├── docs/docker.md            this file
+└── .github/workflows/docker.yml
 ```
 
 ## Run it
 
 ```sh
-cd jammy/docker
+cd jammy
 cp .env.example .env        # then edit .env
 docker compose up -d
 ```
@@ -53,15 +52,15 @@ All Hermes settings come from `.env`, never from the page:
 The endpoint and key fields are hidden in Jammy's Settings in this setup.
 After editing `.env`, run `docker compose up -d` to apply it.
 
-After changing `jammy-chat.html`, rebuild with the two-file command above.
+After changing `web/index.html`, rebuild with the two-file command above.
 
 Without compose:
 
 ```sh
 cd jammy
-docker build -t jammy -f docker/Dockerfile .
-docker run -d --name jammy -p 127.0.0.1:8080:80 \
-  --env-file docker/.env jammy
+docker build -t jammy .
+docker run -d --name jammy -p 127.0.0.1:8080:8080 \
+  --env-file .env jammy
 ```
 
 ## Hermes must be reachable from the container
