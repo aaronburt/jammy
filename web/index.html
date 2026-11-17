@@ -1189,6 +1189,8 @@ button { cursor: pointer; }
     });
     if (thoughtBody && live && thoughtBody.clientHeight) thoughtBody.scrollTop = !kept || kept.end ? thoughtBody.scrollHeight : kept.top;
     if (live && (parts.length ? parts[parts.length - 1].type === "tools" : !thoughtBody)) { const t = document.createElement("div"); t.className = "typing"; t.setAttribute("aria-label", "Jammy is working"); t.innerHTML = "<i></i><i></i><i></i>"; partsEl.appendChild(t); }
+    if (m.waiting && !live) { const w = document.createElement("div"); w.className = "stopped"; w.textContent = "↻ checking Hermes for this reply…"; partsEl.appendChild(w); const t = document.createElement("div"); t.className = "typing"; t.innerHTML = "<i></i><i></i><i></i>"; partsEl.appendChild(t); }
+    if (m.resynced && !live) { const w = document.createElement("div"); w.className = "stopped"; w.textContent = "↻ picked up from Hermes after a reload"; partsEl.appendChild(w); }
     if (m.stopped) { const s = document.createElement("div"); s.className = "stopped"; s.textContent = m.steered ? "↪ interrupted to take your new messages" : "■ stopped"; partsEl.appendChild(s); }
     if (m.error) { const e = document.createElement("div"); e.className = "err-card"; e.innerHTML = m.error; partsEl.appendChild(e); }
     setJam(d.querySelector(":scope > .jam"), state);
@@ -1674,7 +1676,7 @@ button { cursor: pointer; }
     ui.hist = !ui.hist; store.set("ui", ui); renderChrome(); if (ui.hist) { setTimeout(() => $("search").focus(), 220); stale(); }
   };
   $("hfilter").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; ui.hfilter = b.dataset.f; store.set("ui", ui); renderHistory(); });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - remote.at > 60000) loadRemote(); });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) return; if (Date.now() - remote.at > 60000) loadRemote(); if (Date.now() - lastResync > 30000) resyncActive(); });
   scrim.onclick = () => { closeSettings(); closeNav(); syncScrim(); };
   $("homeBtn").onclick = () => { if (streaming) stop(); activeId = null; save(); renderAll(); closeNav(); input.focus(); };
   $("search").addEventListener("input", (e) => { query = e.target.value; renderHistory(); });
@@ -1687,10 +1689,52 @@ button { cursor: pointer; }
     else if (streaming) stop();
   });
 
+  // ---------- Resync with Hermes after a reload ----------
+  // A reload (or a container restart) while a reply is streaming leaves an empty or half reply in the browser, while Hermes
+  // finishes the turn on its own. So: for the open chat, read its Hermes session, find the last message I sent in it, and
+  // take whatever Hermes has after that: the finished reply, or turns that were added from somewhere else.
+  let resyncTimer = 0, lastResync = 0;
+  const tailFor = (h, text) => { for (let k = h.length - 1; k >= 0; k--) { const t = h[k].content.trim(); if (h[k].role === "user" && (t === text || t.endsWith("\n\n" + text))) return k; } return -1; };
+  const openReply = (m) => !m || (m.role === "assistant" && !m.ms && !m.error && !m.stopped);
+  function applyResync(c, h) {
+    const msgs = c.messages; let li = -1;
+    for (let k = msgs.length - 1; k >= 0; k--) if (msgs[k].role === "user") { li = k; break; }
+    if (li < 0) return "same";
+    const tailL = msgs.slice(li + 1), last = tailL[tailL.length - 1], open = openReply(last);
+    const hi = tailFor(h, msgs[li].content.trim());
+    if (hi < 0) return open && last ? "waiting" : "same";
+    const tailH = h.slice(hi + 1);
+    if (open) {
+      if (!tailH.length) return last ? "waiting" : "same";
+      tailH[0].resynced = true; if (last) tailH[0].id = last.id;
+      c.messages = [...msgs.slice(0, li + 1), ...tailH]; c.updated = Date.now(); return "changed";
+    }
+    if (tailH.length > tailL.length) { c.messages.push(...tailH.slice(tailL.length)); c.updated = Date.now(); return "changed"; }
+    return "same";
+  }
+  async function resyncActive(tries = 0) {
+    clearTimeout(resyncTimer); if (!tries) lastResync = Date.now();
+    const c = convs.find((x) => x.id === activeId);
+    if (!c || view || streaming || !c.hid || c.fork || settings.demo || !settings.keepInHermes || !canApi()) return;
+    const last = c.messages[c.messages.length - 1], count = c.messages.length;
+    let h;
+    try { h = normMessages(await hermesApi("GET", `/sessions/${encodeURIComponent(c.hid)}/messages?inline_images=false`)); }
+    catch (e) { if (e.status === 404 && last && openReply(last) && last.role === "assistant") { last.waiting = false; last.stopped = true; save(); renderChat(); } return; }
+    if (streaming || activeId !== c.id || c.messages.length !== count || c.messages[count - 1] !== last) return; // something happened meanwhile
+    const r = applyResync(c, h);
+    if (r === "changed") { save(); renderAll(); scrollDown(true); }
+    else if (r === "waiting") {
+      if (tries < 10) { last.waiting = true; renderChat(); resyncTimer = setTimeout(() => resyncActive(tries + 1), 6000); }
+      else { last.waiting = false; last.stopped = true; save(); renderChat(); }
+    } else if (last && last.waiting) { last.waiting = false; renderChat(); }
+  }
+
   // ---------- Boot ----------
+  convs.forEach((c) => c.messages.forEach((m) => { delete m.waiting; }));
   input.value = store.get("draft", ""); autosize();
   renderAll();
   loadRemote();
+  resyncActive();
 })();
 </script>
 </body>
