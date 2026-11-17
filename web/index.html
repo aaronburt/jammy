@@ -683,6 +683,12 @@ button { cursor: pointer; }
   // chat and anything in Hermes's own list can be told apart. Hermes documents its /api/sessions routes only in part, so
   // every response is read defensively, and any failure just leaves History showing Jammy's own chats.
   const JAMMY = "jammy-", AUX = "jammy-aux-", PAGE_N = 40;
+  // Helper calls (follow-up cards, greetings) are tagged jammy-aux-... and deleted straight after. Hermes also saved the ones
+  // sent before tagging existed under api-<hash> ids, which can't be told apart by id, so History recognises their opening text.
+  const FOLLOW_HEAD = "Here is an exchange from a chat.";
+  const HELPER_RE = /^(?:Here is an exchange from a chat\.|It is [^\n]{0,100}?(?:The user is called|Their recent chats))/;
+  const isHelper = (s) => s.id.startsWith(AUX) || HELPER_RE.test(s.preview) || HELPER_RE.test(s.title);
+  const norm40 = (t) => String(t || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 40);
   const SRC = { api_server: "API", api: "API", cli: "Terminal", tui: "Terminal", desktop: "Desktop", acp: "Editor", telegram: "Telegram", discord: "Discord", slack: "Slack", whatsapp: "WhatsApp", signal: "Signal", matrix: "Matrix", email: "Email", sms: "SMS", webhook: "Webhook", cron: "Scheduled" };
   let remote = { list: [], raw: 0, loading: false, loaded: false, error: "", more: false, at: 0 };
   let sidOff = false; // Hermes refused the session tag, so chats go out untagged until settings change
@@ -712,7 +718,10 @@ button { cursor: pointer; }
     return { res: r2, sid: "" };
   }
   const auxId = () => AUX + uid();
-  const dropAux = (sid) => { if (sid && canApi()) hermesApi("DELETE", "/sessions/" + encodeURIComponent(sid)).catch(() => {}); };
+  function dropAux(sid, n = 0) {
+    if (!sid || !canApi()) return;
+    hermesApi("DELETE", "/sessions/" + encodeURIComponent(sid)).catch((e) => { if (e.status !== 404 && n < 2) setTimeout(() => dropAux(sid, n + 1), n ? 20000 : 4000); });
+  }
   const dropHermes = (sid) => (isJammySid(sid) && canApi() ? hermesApi("DELETE", "/sessions/" + encodeURIComponent(sid)).then(() => true, () => false) : Promise.resolve(false));
 
   const tms = (v) => { if (v == null || v === "") return 0; if (typeof v === "string" && !/^[\d.]+$/.test(v.trim())) { const d = Date.parse(v); return isNaN(d) ? 0 : d; } const n = +v; return !n ? 0 : n < 1e11 ? n * 1000 : n; };
@@ -736,7 +745,7 @@ button { cursor: pointer; }
       const raw = listFrom(j); const got = raw.map(normSession).filter(Boolean);
       remote.list = more ? remote.list.concat(got.filter((g) => !remote.list.some((x) => x.id === g.id))) : got;
       remote.raw = off + raw.length; remote.loaded = true;
-      remote.more = raw.length > 0 && (j && typeof j.total === "number" ? remote.raw < j.total : raw.length >= lim);
+      remote.more = raw.length > 0 && (j && typeof j.has_more === "boolean" ? j.has_more : j && typeof j.total === "number" ? remote.raw < j.total : raw.length >= lim);
     } catch (e) { remote.error = remoteError(e); }
     finally { remote.loading = false; remote.at = Date.now(); renderHistory(); }
   }
@@ -754,8 +763,11 @@ button { cursor: pointer; }
     });
     if (wantsHermes() && (settings.demo || canApi())) {
       const mine = chatHids();
+      const firsts = new Set(convs.map((c) => { const u = c.messages.find((m) => m.role === "user"); return u ? norm40(u.content) : ""; }).filter(Boolean));
       remote.list.forEach((s) => {
-        if (s.id.startsWith(AUX) || mine.has(s.id)) return;
+        if (isHelper(s) || mine.has(s.id)) return;
+        // chats from before tagging were saved by Hermes as api-<hash>; hide the copy of one that is still in this browser
+        if (!isJammySid(s.id) && s.source === "api_server" && s.preview && firsts.has(norm40(s.preview))) return;
         const kind = kindOf(s); if (f === "jammy" && kind !== "jammy") return; if (f === "other" && kind === "jammy") return;
         const t = sTitle(s); if (q && !(t.toLowerCase().includes(q) || s.preview.toLowerCase().includes(q))) return;
         rows.push({ remote: s, id: "r:" + s.id, title: t, at: s.at, kind });
@@ -823,7 +835,7 @@ button { cursor: pointer; }
   function adopt(v) {
     const own = v.own && !v.demo;
     const c = { id: uid(), title: own ? v.title : "Continued: " + v.title, messages: v.messages, created: v.created || Date.now(), updated: Date.now() };
-    if (own) { c.hid = v.sid; c.hids = [v.sid]; c.kept = true; } else c.from = v.label;
+    if (own) { c.hid = v.sid; c.hids = [v.sid]; c.hsync = v.sid; c.kept = true; } else c.from = v.label;
     convs.push(c); view = null; activeId = c.id; save();
     return c;
   }
@@ -841,11 +853,22 @@ button { cursor: pointer; }
   }
   // Which Hermes session a chat's next turn goes to. Editing or regenerating rewrites the chat's history, so those turns
   // start a fresh session (Hermes's copy is append-only); the old one stays in Hermes as it was.
+  // Hermes answers a tagged request from the session it has stored and ignores earlier turns in `messages`. So a session Hermes
+  // hasn't seen yet (a continued, edited or regenerated chat) gets its context folded into the first message instead.
   function keepSid(c) {
-    if (!settings.keepInHermes || settings.demo) return "";
+    if (!settings.keepInHermes || settings.demo) return { sid: "", fresh: false };
     c.hids = c.hids || [];
-    if (!c.hid || c.fork) { c.hid = JAMMY + c.id + (c.hids.length ? "-" + (c.hids.length + 1) : ""); c.hids.push(c.hid); c.fork = false; }
-    return c.hid;
+    if (!c.hid || c.fork) { c.hid = JAMMY + c.id + (c.hids.length ? "-" + (c.hids.length + 1) : ""); c.hids.push(c.hid); c.fork = false; c.hsync = ""; }
+    else if (c.hsync === undefined) c.hsync = c.kept ? c.hid : ""; // chats saved before this was tracked
+    return { sid: c.hid, fresh: c.hsync !== c.hid };
+  }
+  function foldHistory(msgs) {
+    const sys = msgs.filter((m) => m.role === "system"), rest = msgs.filter((m) => m.role !== "system");
+    if (rest.length < 2) return msgs;
+    const last = rest[rest.length - 1];
+    let lines = rest.slice(0, -1).map((m) => (m.role === "user" ? "Me: " : "You: ") + m.content), total = 0, cut = false;
+    for (let i = lines.length - 1; i >= 0; i--) { total += lines[i].length; if (total > 60000) { lines = lines.slice(i + 1); cut = true; break; } }
+    return [...sys, { role: "user", content: `[Our conversation so far, for context${cut ? " (the earliest messages are left out)" : ""}:]\n\n${lines.join("\n\n")}\n\n[My new message:]\n\n${last.content}` }];
   }
   function afterKept(c) {
     const tag = c.hid + "|" + c.title;
@@ -861,7 +884,9 @@ button { cursor: pointer; }
     const arr = Array.isArray(j) ? j : (j && (j.messages || j.items || j.data)) || [];
     const out = [], counts = new Map(), calls = {}; let cur = null;
     const when = (r) => tms(r.timestamp ?? r.created_at ?? r.time);
-    arr.forEach((r) => {
+    const rows = arr.filter((r) => r && typeof r === "object");
+    if (rows.length > 1 && rows.every((r) => typeof r.id === "number")) rows.sort((a, b) => a.id - b.id);
+    rows.forEach((r) => {
       if (!r || typeof r !== "object") return;
       const text = textOf(r.content).trim();
       if (r.role === "user") { cur = null; if (text) out.push({ id: uid(), role: "user", content: text, t: when(r) }); return; }
@@ -987,7 +1012,7 @@ button { cursor: pointer; }
     return [...new Set([...specific, ...generic])].slice(0, 3);
   }
   async function aiFollowups(q, a, signal) {
-    const brief = `Here is an exchange from a chat.\n\nThe user asked: ${q.slice(0, 600)}\n\nYou answered: ${a.slice(0, 1800)}\n\nSuggest 3 follow-up questions the user is likely to ask next. Write each one the way the user would type it to you (first person, e.g. "How do I…?"), specific to this exchange, at most 12 words, and different in kind: one that digs deeper, one that applies it or asks for the next step, and one that questions or double-checks it. Do not use any tools. Reply with ONLY a JSON array of 3 strings, no markdown fences.`;
+    const brief = `${FOLLOW_HEAD}\n\nThe user asked: ${q.slice(0, 600)}\n\nYou answered: ${a.slice(0, 1800)}\n\nSuggest 3 follow-up questions the user is likely to ask next. Write each one the way the user would type it to you (first person, e.g. "How do I…?"), specific to this exchange, at most 12 words, and different in kind: one that digs deeper, one that applies it or asks for the next step, and one that questions or double-checks it. Do not use any tools. Reply with ONLY a JSON array of 3 strings, no markdown fences.`;
     const headers = { "Content-Type": "application/json" }; if (settings.key) headers.Authorization = "Bearer " + settings.key;
     const { res, sid: aux } = await hfetch(settings.endpoint, { method: "POST", signal, headers, body: JSON.stringify({ model: settings.model || "hermes-agent", messages: [{ role: "user", content: brief }], stream: false, reasoning_effort: "low" }) }, auxId());
     dropAux(aux);
@@ -1321,14 +1346,15 @@ button { cursor: pointer; }
 
   async function run(c) {
     abortFollow();
-    const history = buildMessages(c);
+    const ks = keepSid(c);
+    const history = ks.sid && ks.fresh ? foldHistory(buildMessages(c)) : buildMessages(c);
     const question = turnText(c);
     const m = { id: uid(), role: "assistant", content: "", t: Date.now(), tt: [] };
     c.messages.push(m); c.updated = Date.now();
     const controller = new AbortController();
     const t0 = performance.now();
     streaming = { convId: c.id, msgId: m.id, controller, t0, steer: false, userStop: false };
-    const sid = keepSid(c);
+    const sid = ks.sid;
     save(); renderHistory(); renderChat(); updateSend(); scrollDown(true); renderTrace(false, true);
 
     let frame = 0;
@@ -1357,7 +1383,7 @@ button { cursor: pointer; }
       const now = Date.now(); m.tt.forEach((t) => { if (!t.e) t.e = now; });
       m.ms = Math.round(performance.now() - t0);
       const info = streaming; streaming = null; c.updated = Date.now();
-      if (sink.kept) { c.kept = true; afterKept(c); }
+      if (sink.kept) { c.kept = true; c.hsync = c.hid; afterKept(c); }
       const next = takeQueue(c, m, info);
       save();
       if (tf) cancelAnimationFrame(tf);
