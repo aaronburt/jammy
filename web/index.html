@@ -364,6 +364,28 @@ button { cursor: pointer; }
 .remote-note button:hover { border-color: var(--accent); color: var(--accent); }
 .remote-state { text-align: center; color: var(--muted); padding: 36px 0; font-size: 14px; }
 
+/* @ picker: chips on the composer and on sent messages, and the menu */
+.refs { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.refs[hidden], .mention[hidden] { display: none; }
+.ref { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent); background: var(--accent-soft); border-radius: 999px; padding: 3px 5px 3px 10px; font-size: 12.5px; line-height: 1.5; }
+.ref > i { font-style: normal; }
+.ref > b { font-weight: 500; min-width: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ref .x { border: 0; background: none; color: var(--muted); padding: 1px; border-radius: 50%; display: inline-flex; cursor: pointer; }
+.ref .x:hover { color: var(--err); }
+.ref.loading::after { content: ""; width: 11px; height: 11px; margin: 0 4px 0 0; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+.ref.failed { border-color: color-mix(in oklab, var(--err) 50%, transparent); background: color-mix(in oklab, var(--err) 8%, var(--surface)); }
+.msg.user .refs { justify-content: flex-end; max-width: min(85%, 600px); }
+.msg.user .ref { padding-right: 10px; }
+.mention { position: absolute; left: 0; right: 0; bottom: calc(100% + 10px); max-height: min(330px, 46vh); overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); padding: 6px; z-index: 5; animation: rise .15s ease-out both; }
+.mention .eyebrow { padding: 8px 10px 4px; }
+.mention .opt { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; text-align: left; border-radius: 12px; padding: 7px 10px; }
+.mention .opt[aria-selected="true"] { background: var(--accent-soft); }
+.mention .opt .ico { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border-radius: 9px; background: var(--accent-soft); font-size: 14px; }
+.mention .opt .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mention .opt .t { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention .opt .d { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention .note { padding: 8px 10px; font-size: 13px; color: var(--muted); }
+
 /* ---------- Narrower screens ---------- */
 @media (max-width: 1180px) {
   .hello { grid-template-columns: 1fr; } .hello .pedestal { display: none; }
@@ -434,7 +456,9 @@ button { cursor: pointer; }
     <div class="scroll" id="scroll"><div class="column" id="column"></div></div>
     <div class="composer-wrap">
       <form class="composer" id="composer">
+        <div class="mention" id="mention" role="listbox" aria-label="Attach a chat or skill" hidden></div>
         <div class="inner">
+          <div class="refs" id="refs" hidden></div>
           <textarea id="input" rows="1" placeholder="Ask Jammy anything…" aria-label="Message Jammy"></textarea>
           <div class="bar">
             <div class="moods" id="moods" role="group" aria-label="Thinking profile">
@@ -700,7 +724,7 @@ button { cursor: pointer; }
   async function hermesApi(method, path, body) {
     const headers = {}; if (settings.key) headers.Authorization = "Bearer " + settings.key; if (body) headers["Content-Type"] = "application/json";
     let res;
-    try { res = await fetch(apiBase() + "/api" + path, { method, headers, body: body ? JSON.stringify(body) : undefined }); }
+    try { res = await fetch(apiBase() + (path.startsWith("/v1/") ? "" : "/api") + path, { method, headers, body: body ? JSON.stringify(body) : undefined }); }
     catch (e) { throw Object.assign(new Error(e.message), { kind: "network" }); }
     if (!res.ok) throw Object.assign(new Error("http " + res.status), { kind: "http", status: res.status });
     const t = await res.text(); try { return t ? JSON.parse(t) : {}; } catch { return {}; }
@@ -754,8 +778,8 @@ button { cursor: pointer; }
   const kindOf = (s) => (isJammySid(s.id) ? "jammy" : s.source || "hermes");
   const labelOf = (s) => (isJammySid(s.id) ? "Jammy" : SRC[s.source] || (s.source ? s.source.replace(/[_-]+/g, " ") : "Hermes"));
   const sTitle = (s) => s.title || s.preview.slice(0, 60) || "Untitled session";
-  function histRows() {
-    const q = query.toLowerCase(), f = ui.hfilter || "all", rows = [];
+  function histRows(q = query.toLowerCase(), f = ui.hfilter || "all") {
+    const rows = [];
     convs.forEach((c) => {
       if (f === "other") return;
       if (q && !(c.title.toLowerCase().includes(q) || c.messages.some((m) => (m.content || "").toLowerCase().includes(q)))) return;
@@ -1087,6 +1111,7 @@ button { cursor: pointer; }
     const d = document.createElement("div"); d.dataset.id = m.id;
     if (m.role === "user") {
       d.className = "msg user"; d.innerHTML = `<div class="bubble"></div>`; d.firstChild.textContent = m.content;
+      if (m.refs && m.refs.length) { const rs = document.createElement("div"); rs.className = "refs"; m.refs.forEach((r) => rs.appendChild(refChip(r))); d.insertBefore(rs, d.firstChild); }
       const lastUser = !conv.messages.slice(idx + 1).some((x) => x.role === "user");
       if (lastUser && !streaming && !conv.readonly) { const e = document.createElement("button"); e.type = "button"; e.className = "edit"; e.textContent = "Edit"; e.onclick = () => editFrom(conv, idx); d.appendChild(e); }
       return d;
@@ -1232,40 +1257,41 @@ button { cursor: pointer; }
     if (gone && gone.hids) Promise.all(gone.hids.map(dropHermes)).then(() => { if (wantsHermes() && canApi()) loadRemote(); });
   }
   const titleFrom = (s) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > 42 ? t.slice(0, 40).trimEnd() + "…" : t || "New chat"; };
-  function editFrom(c, idx) { if (streaming || c.readonly) return; if (c.hid) c.fork = true; input.value = c.messages[idx].content; c.messages = c.messages.slice(0, idx); save(); renderAll(); autosize(); updateSend(); input.focus(); }
+  function editFrom(c, idx) { if (streaming || c.readonly) return; if (c.hid) c.fork = true; input.value = c.messages[idx].content; attachments = (c.messages[idx].refs || []).map((r) => ({ ...r, loading: false, failed: "" })); renderRefs(); c.messages = c.messages.slice(0, idx); save(); renderAll(); autosize(); updateSend(); input.focus(); }
 
   // ---------- Sending ----------
   const input = $("input"), sendBtn = $("sendBtn"), composer = $("composer");
   function updateSend() {
     composer.classList.toggle("busy", !!streaming);
-    const has = !!input.value.trim();
+    const has = !!input.value.trim() && !refsBlocked();
     if (streaming && !(has && canAdd())) { sendBtn.disabled = false; sendBtn.innerHTML = `<svg width="17" height="17"><use href="#i-stop"/></svg>`; sendBtn.setAttribute("aria-label", "Stop"); sendBtn.title = "Stop"; }
     else if (streaming) { sendBtn.disabled = false; sendBtn.innerHTML = `<svg width="19" height="19"><use href="#i-up"/></svg>`; sendBtn.setAttribute("aria-label", "Add message"); sendBtn.title = "Add to this reply. Ctrl+Enter steers now."; }
     else { sendBtn.disabled = !has; sendBtn.innerHTML = `<svg width="19" height="19"><use href="#i-up"/></svg>`; sendBtn.setAttribute("aria-label", "Send"); sendBtn.title = "Send"; }
     const vc = active();
-    input.placeholder = streaming && canAdd() ? "Add another message…" : vc && vc.readonly ? "Reply to carry on in Jammy…" : "Ask Jammy anything…";
+    input.placeholder = streaming && canAdd() ? "Add another message…" : vc && vc.readonly ? "Reply to carry on in Jammy…" : isPhone() ? "Ask Jammy anything…" : "Ask Jammy anything… (type @ to add a chat or skill)";
   }
   const autosize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 220) + "px"; };
   input.addEventListener("input", () => { autosize(); updateSend(); store.set("draft", input.value); });
   input.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing || (mention && mention.items.length)) return;
     e.preventDefault();
     if (!streaming) { composer.requestSubmit(); return; }
-    if (!input.value.trim() || !canAdd()) return; // Enter never stops a reply by accident
+    if (!input.value.trim() || !canAdd() || refsBlocked()) return; // Enter never stops a reply by accident
     if (e.ctrlKey || e.metaKey) steerNow(); else composer.requestSubmit();
   });
   composer.addEventListener("submit", (e) => {
     e.preventDefault(); const v = input.value.trim();
-    if (streaming) { if (v && canAdd()) enqueue(v); else stop(); return; }
-    if (v) send(v);
+    const blocked = refsBlocked();
+    if (streaming) { if (v && canAdd() && !blocked) enqueue(v, takeRefs()); else stop(); return; }
+    if (v && !blocked) send(v, takeRefs());
   });
 
-  function send(text) {
+  function send(text, refs) {
     if (streaming) return;
     let c = active(); if (c && c.readonly) { if (c.loading) return; c = adopt(c); }
     if (!c) c = newConv();
     if (!c.messages.length) c.title = titleFrom(text);
-    c.messages.push({ id: uid(), role: "user", content: text, t: Date.now() });
+    c.messages.push({ id: uid(), role: "user", content: text, t: Date.now(), ...(refs && refs.length ? { refs } : {}) });
     input.value = ""; store.set("draft", ""); autosize();
     run(c);
   }
@@ -1277,6 +1303,129 @@ button { cursor: pointer; }
   }
   function stop() { if (streaming) { streaming.userStop = true; streaming.controller.abort(); } }
 
+  // ---------- @ picker: attach a past chat or a skill to a message ----------
+  // Hermes expands its own @file: / @diff / @git: only in its terminal and messaging paths, never through the API, so Jammy does
+  // this itself. An attached chat becomes a transcript in front of the message; an attached skill becomes an instruction to load it.
+  // Skills come from GET /v1/skills; chats from Jammy's own list and from Hermes's sessions (the same list History shows).
+  let attachments = []; // { key, kind: "chat" | "skill", title, name, sub, ctx, loading, failed }
+  let mention = null;   // { items, sel, from, to, q } while the menu is open
+  let skills = { list: [], loaded: false, loading: false, error: "", at: 0 };
+  const refsBlocked = () => attachments.some((r) => r.loading || r.failed);
+  const refEmoji = (r) => (r.kind === "skill" ? "🧩" : "💬");
+  const SKILL_SAMPLES = [
+    { name: "web-research", description: "Search the web and write up what it finds, with sources", category: "research" },
+    { name: "code-review", description: "Review a diff for bugs, risks and style", category: "dev" },
+    { name: "daily-brief", description: "Plan the day from your tasks and calendar", category: "productivity" },
+    { name: "system-doctor", description: "Check disk, memory and services on this machine", category: "ops" },
+  ];
+  const skillsError = (e) => (e.kind === "network" ? "can't reach Hermes" : e.status === 401 || e.status === 403 ? "Hermes rejected the key" : e.status === 404 ? "this Hermes has no skills list" : "Hermes returned " + e.status);
+  async function loadSkills() {
+    if (skills.loading) return;
+    if (settings.demo) { if (!skills.loaded) skills = { list: SKILL_SAMPLES, loaded: true, loading: false, error: "", at: Date.now() }; return; }
+    if (!canApi() || (skills.loaded && Date.now() - skills.at < 300000) || (skills.error && Date.now() - skills.at < 60000)) return;
+    skills.loading = true; skills.error = "";
+    try {
+      const list = listFrom(await hermesApi("GET", "/v1/skills")).map((r) => (r && (r.name || r.id) ? { name: String(r.name || r.id), description: String(r.description || "").replace(/\s+/g, " ").trim(), category: String(r.category || "") } : null)).filter(Boolean);
+      skills = { list, loaded: true, loading: false, error: "", at: Date.now() };
+    } catch (e) { skills = { ...skills, loading: false, error: skillsError(e), at: Date.now() }; }
+    if (mention) mentionUpdate();
+  }
+  const dayWord = (t) => { if (!t) return ""; const d = new Date(t); d.setHours(0, 0, 0, 0); const today = new Date(); today.setHours(0, 0, 0, 0); const diff = Math.round((today - d) / 864e5); return diff <= 0 ? "Today" : diff === 1 ? "Yesterday" : d.toLocaleDateString([], { month: "short", day: "numeric" }); };
+  function mentionItems(q) {
+    const lq = q.toLowerCase();
+    const chats = histRows(lq, "all").filter((r) => r.id !== activeId && (!r.local || r.local.messages.length)).slice(0, 6).map((r) => {
+      const who = r.kind === "jammy" ? "Jammy" : r.kind === "local" ? "Local" : labelOf(r.remote);
+      return { kind: "chat", key: "c:" + r.id, title: r.title, sub: [who, dayWord(r.at)].filter(Boolean).join(" · "), local: r.local, remote: r.remote };
+    });
+    const rank = (x) => (x.name.toLowerCase().startsWith(lq) ? 0 : 1);
+    const sk = skills.list.filter((x) => !lq || x.name.toLowerCase().includes(lq) || x.description.toLowerCase().includes(lq)).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)).slice(0, 6)
+      .map((x) => ({ kind: "skill", key: "s:" + x.name, title: x.name, name: x.name, sub: x.description || x.category }));
+    return { chats, sk };
+  }
+  function mentionUpdate() {
+    const pos = input.selectionStart == null ? input.value.length : input.selectionStart;
+    const m = /(^|\s)@([^\s@]{0,40})$/.exec(input.value.slice(0, pos));
+    if (!m) { mentionClose(); return; }
+    const q = m[2]; loadSkills();
+    const { chats, sk } = mentionItems(q); const items = [...chats, ...sk];
+    mention = { items, nChats: chats.length, q, from: pos - q.length - 1, to: pos, sel: mention && mention.q === q ? Math.min(mention.sel, Math.max(0, items.length - 1)) : 0 };
+    renderMention();
+  }
+  function mentionClose() { mention = null; const el = $("mention"); el.hidden = true; el.innerHTML = ""; }
+  function renderMention() {
+    const el = $("mention"); el.innerHTML = ""; el.hidden = false;
+    const head = (t) => { const h = document.createElement("div"); h.className = "eyebrow"; h.textContent = t; el.appendChild(h); };
+    const note = (t) => { const n = document.createElement("div"); n.className = "note"; n.textContent = t; el.appendChild(n); };
+    mention.items.forEach((it, i) => {
+      if (i === 0 && mention.nChats) head("Chats"); else if (i === mention.nChats && it.kind === "skill") head("Skills");
+      const b = document.createElement("button"); b.type = "button"; b.className = "opt"; b.setAttribute("role", "option"); b.setAttribute("aria-selected", String(i === mention.sel));
+      b.innerHTML = `<span class="ico"></span><span class="tx"><span class="t"></span><span class="d"></span></span>`;
+      b.querySelector(".ico").textContent = refEmoji(it); b.querySelector(".t").textContent = it.title; b.querySelector(".d").textContent = it.sub || "";
+      b.onmousedown = (e) => e.preventDefault(); // keep focus in the box
+      b.onclick = () => mentionPick(it); b.onmousemove = () => { if (mention.sel !== i) { mention.sel = i; renderMention(); } };
+      el.appendChild(b);
+      if (i === mention.sel) setTimeout(() => b.scrollIntoView({ block: "nearest" }), 0);
+    });
+    if (!mention.items.length) note(skills.loading ? "Loading skills…" : mention.q ? `Nothing matches “${mention.q}”.` : "No chats or skills to attach yet.");
+    if (skills.error && !skills.list.length && mention.items.length === mention.nChats) note("Skills unavailable: " + skills.error + ".");
+  }
+  function mentionPick(it) {
+    const v = input.value, before = v.slice(0, mention.from), after = v.slice(mention.to);
+    input.value = before + after; mentionClose(); addRef(it);
+    autosize(); updateSend(); store.set("draft", input.value); input.focus(); input.setSelectionRange(before.length, before.length);
+  }
+  function addRef(it) {
+    if (attachments.some((r) => r.key === it.key)) return;
+    const r = { key: it.key, kind: it.kind, title: it.title, name: it.name || "", sub: it.sub || "", ctx: "", loading: false, failed: "" };
+    attachments.push(r);
+    if (it.kind === "chat") {
+      if (it.local) r.ctx = transcriptOf(it.local.messages);
+      else { r.loading = true; loadRefCtx(r, it.remote); }
+    }
+    renderRefs(); updateSend();
+  }
+  async function loadRefCtx(r, s) {
+    try { r.ctx = transcriptOf(normMessages(settings.demo ? demoMessages(s) : await hermesApi("GET", `/sessions/${encodeURIComponent(s.id)}/messages?inline_images=false`))); if (!r.ctx) r.failed = "nothing in it"; }
+    catch (e) { r.failed = remoteError(e); }
+    r.loading = false; renderRefs(); updateSend();
+  }
+  function transcriptOf(msgs) {
+    let t = msgs.map((m) => (m.role === "user" ? "Me: " + m.content : "You: " + stripTools(m.content || ""))).filter((x) => x.length > 5).join("\n\n");
+    if (t.length > 12000) t = "(the earlier part is left out)\n" + t.slice(-12000);
+    return t;
+  }
+  function refChip(r, removable) {
+    const c = document.createElement("span"); c.className = "ref" + (r.loading ? " loading" : "") + (r.failed ? " failed" : "");
+    c.innerHTML = '<i aria-hidden="true"></i><b></b>'; c.firstChild.textContent = refEmoji(r); c.lastChild.textContent = r.kind === "skill" ? "@" + r.title : r.title;
+    c.title = r.failed ? "Couldn't load this chat: " + r.failed : r.kind === "skill" ? "Skill: " + (r.sub || r.title) : "Chat attached as context";
+    if (removable) {
+      const x = document.createElement("button"); x.type = "button"; x.className = "x"; x.setAttribute("aria-label", "Remove " + r.title); x.title = "Remove"; x.innerHTML = '<svg width="13" height="13"><use href="#i-x"/></svg>';
+      x.onclick = () => { attachments = attachments.filter((a) => a !== r); renderRefs(); updateSend(); input.focus(); };
+      c.appendChild(x);
+    }
+    return c;
+  }
+  function renderRefs() { const el = $("refs"); el.innerHTML = ""; attachments.forEach((r) => el.appendChild(refChip(r, true))); el.hidden = !attachments.length; }
+  function takeRefs() { const out = attachments.filter((r) => !r.failed && !r.loading).map(({ key, kind, title, name, sub, ctx }) => ({ key, kind, title, name, sub, ctx })); attachments = []; renderRefs(); return out; }
+  // What Hermes reads in front of the message
+  function refPrefix(m) {
+    if (!m.refs || !m.refs.length) return "";
+    return m.refs.map((r) => (r.kind === "skill"
+      ? `[Use the "${r.name || r.title}" skill for this request: load it with your skill tools first, then follow its instructions.]`
+      : `[Context: an earlier chat titled "${r.title}". Use it as background for my message below; don't answer it.]\n\n${r.ctx}\n\n[End of that chat.]`)).join("\n\n") + "\n\n";
+  }
+  input.addEventListener("input", mentionUpdate);
+  input.addEventListener("click", mentionUpdate);
+  input.addEventListener("keyup", (e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") mentionUpdate(); });
+  input.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== input) mentionClose(); }, 150));
+  input.addEventListener("keydown", (e) => {
+    if (!mention || e.isComposing) return;
+    const n = mention.items.length;
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); mentionClose(); }
+    else if (n && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); mention.sel = (mention.sel + (e.key === "ArrowDown" ? 1 : -1) + n) % n; renderMention(); }
+    else if (n && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); mentionPick(mention.items[mention.sel]); }
+  }, true);
+
   // ---------- Steering: messages sent while Jammy is still replying ----------
   // Hermes's chat endpoint takes one request per turn and gives no run id to talk to, and its HTTP API documents only
   // "stop a run". So: new messages wait in a tray and go out as ONE turn when the reply finishes, or "Steer now" stops
@@ -1285,14 +1434,14 @@ button { cursor: pointer; }
   let pending = []; // { id, text } for the running reply (streaming.convId)
   const canAdd = () => !!streaming && activeId === streaming.convId;
   const turnText = (c) => { const out = []; for (let i = c.messages.length - 1; i >= 0 && c.messages[i].role === "user"; i--) out.unshift(c.messages[i].content); return out.join("\n\n"); };
-  function enqueue(text) {
-    if (!streaming) { send(text); return; }
-    pending.push({ id: uid(), text });
+  function enqueue(text, refs) {
+    if (!streaming) { send(text, refs); return; }
+    pending.push({ id: uid(), text, refs: refs || [] });
     input.value = ""; store.set("draft", ""); autosize(); updateSend(); renderQueue(); scrollDown(true);
   }
   function steerNow() {
     if (!streaming) return;
-    const v = input.value.trim(); if (v && canAdd()) enqueue(v);
+    const v = input.value.trim(); if (v && canAdd() && !refsBlocked()) enqueue(v, takeRefs());
     if (!pending.length) return;
     streaming.steer = true; streaming.controller.abort();
   }
@@ -1303,7 +1452,7 @@ button { cursor: pointer; }
     pending.forEach((p) => {
       const b = document.createElement("div"); b.className = "qmsg";
       b.innerHTML = '<span></span><button type="button" aria-label="Remove this message" title="Remove"><svg width="14" height="14"><use href="#i-x"/></svg></button>';
-      b.firstChild.textContent = p.text;
+      b.firstChild.textContent = p.text + (p.refs && p.refs.length ? "\n" + p.refs.map((r) => refEmoji(r) + " " + r.title).join("  ") : "");
       b.lastChild.onclick = () => { pending = pending.filter((x) => x.id !== p.id); renderQueue(); updateSend(); };
       q.appendChild(b);
     });
@@ -1317,12 +1466,12 @@ button { cursor: pointer; }
     if (!pending.length) return false;
     const items = pending.splice(0);
     if (m.error || (info && info.userStop)) {
-      if (activeId === c.id) { const txt = items.map((p) => p.text).join("\n\n"); input.value = input.value.trim() ? txt + "\n\n" + input.value : txt; store.set("draft", input.value); autosize(); }
+      if (activeId === c.id) { const txt = items.map((p) => p.text).join("\n\n"); input.value = input.value.trim() ? txt + "\n\n" + input.value : txt; store.set("draft", input.value); autosize(); attachments = items.flatMap((p) => p.refs || []).concat(attachments); renderRefs(); }
       return false;
     }
     const cut = !!(info && info.steer && m.stopped);
     if (cut) m.steered = true;
-    items.forEach((p) => c.messages.push({ id: uid(), role: "user", content: p.text, t: Date.now(), ...(cut ? { steer: true } : {}) }));
+    items.forEach((p) => c.messages.push({ id: uid(), role: "user", content: p.text, t: Date.now(), ...(p.refs && p.refs.length ? { refs: p.refs } : {}), ...(cut ? { steer: true } : {}) }));
     return true;
   }
 
@@ -1337,7 +1486,8 @@ button { cursor: pointer; }
     c.messages.forEach((m) => {
       if (m.role === "user") {
         const note = m.steer && !noted ? STEER_NOTE : ""; if (m.steer) noted = true;
-        if (inUser) msgs[msgs.length - 1].content += "\n\n" + note + m.content; else msgs.push({ role: "user", content: note + m.content });
+        const body = refPrefix(m) + m.content;
+        if (inUser) msgs[msgs.length - 1].content += "\n\n" + note + body; else msgs.push({ role: "user", content: note + body });
         inUser = true;
       } else { const t = stripTools(m.content || ""); if (t) { msgs.push({ role: "assistant", content: t }); inUser = false; noted = false; } }
     });

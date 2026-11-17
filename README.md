@@ -5,6 +5,7 @@ A chat window for a Hermes agent, with a jam-jar personality. One small Rust (Ro
 - `web/index.html` is the whole UI (a single file).
 - `server/` is the Rocket server that serves it and proxies `/v1/*` (chat) and `/api/sessions` (History) to Hermes.
 - **History** lists Jammy's chats together with the sessions in Hermes, including ones from the terminal or messaging apps. Chats Jammy starts are tagged with a Hermes session id (`jammy-…`), so Hermes keeps them and you can tell which began in Jammy. It needs a Hermes with the sessions API; the two switches are under Settings → History.
+- **@ in the message box** attaches a past chat (Jammy's own or a Hermes session) or an installed skill to the message. A chat goes in front of the message as a transcript (capped at about 12,000 characters); a skill becomes an instruction to load it first, since Hermes's own `@file:` and `/skill` shortcuts are not expanded through the API. The skills list comes from `GET /v1/skills`.
 - `Dockerfile` and the compose files run it. See [docs/docker.md](docs/docker.md).
 
 ## Run it
